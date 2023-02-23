@@ -1,0 +1,41 @@
+---
+title: "data project"
+author: "Andrew Wrench"
+date: "2023-02-23"
+output: html_document
+---
+```{r}***
+library(ggplot2)
+library(ggraph)
+covid_wearables = read.csv("/Users/andrewwrench/Downloads/hrv-covid19-master/data/wearables.csv")
+cluster = ggraph(covid_wearables, layout = 'dendrogram', circular = 'TRUE') + geom_node_point(aes(x = x, y = y, size = 10)) + geom_edge_diagonal() + theme_graph()
+cluster + geom_point(aes(color = resting_pulse), data = covid_wearables) + geom_text(aes(label = body_temperature_avg), data = covid_wearables, nudge_y = 0.1)
+```
+
+```{r}
+library(tidyverse)
+nrow(covid_wearables)
+covid_steps_dropped = drop_na(covid_wearables, steps_speed)
+nrow(covid_steps_dropped)
+covid_steps_speed = ggplot(covid_steps_dropped, mapping = aes(x = steps_speed)) + geom_histogram(binwidth = 1) + labs(title = 'Step Speed', x = 'Step Speed', y = 'Frequency') + theme(plot.title = element_text(hjust = 0.5))
+print(covid_steps_speed)
+```
+
+```{r}
+covid_bp = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/blood_pressure.csv')
+nrow(covid_bp)
+covid_bp_dropped = drop_na(covid_bp, diastolic, systolic)
+nrow(covid_bp_dropped)
+covid_bp_hist = ggplot(covid_bp_dropped, mapping = aes(x = systolic)) + geom_histogram(bindwidth = 1) + labs(title = 'Step Speed', x = 'Step Speed', y = 'Frequency') + theme(plot.title = element_text(hjust = 0.5))
+print(covid_bp_hist)
+```
+
+```{r}
+covid_surveys = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/surveys.csv')
+covid_surveys_symptomlength = filter(covid_surveys, scale == 'S_COVID_SYMPTOMS')
+covid_surveys_coughing = filter(covid_surveys, scale == 'S_COVID_COUGH')
+covid_surveys_symptomlength$coughing = covid_surveys_coughing$value
+boxplot_covid = ggplot(covid_surveys_symptomlength, aes(x = covid_surveys_symptomlength$value, y = covid_surveys_coughing$value)) + 
+  geom_boxplot()
+print(boxplot_covid)
+```
