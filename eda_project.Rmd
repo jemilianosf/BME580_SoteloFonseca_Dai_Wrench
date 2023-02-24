@@ -1,0 +1,42 @@
+---
+title: "exploratorydataproposal"
+author: "Andrew Wrench"
+date: "2023-02-23"
+output: html_document
+---
+```{r}
+library(ggplot2)
+wearables_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/wearables.csv')
+blood_pressure_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/blood_pressure.csv')
+hrv_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/hrv_measurements.csv')
+```
+
+## Code for histogram of bpm, proving effective strategies for biometrics tools related to wearables 
+```{r}
+nrow(hrv_data)
+hrv_data_mxdmn_dropped = drop_na(hrv_data, mxdmn)
+nrow(hrv_data_mxdmn_dropped)
+mxdmn_hist = ggplot(hrv_data_mxdmn_dropped, mapping = aes(x = bpm)) + geom_histogram(binwidth = 1) + labs(title = 'Range of BPM Per Individual', x = 'Range of BPM Per Individual', y = 'Frequency') + theme(plot.title = element_text(hjust = 0.5))
+print(mxdmn_hist)
+```
+
+## Code for boxplot of blood pressure from wearables file
+```{r}
+blood_pressure_dropped = drop_na(blood_pressure, robinson_index)
+nrow(blood_pressure_dropped)
+blood_pressure_hist = ggplot(blood_pressure_dropped, mapping = aes(x = robinson_index)) + geom_histogram(binwidth = 1) + labs(title = 'Step Speed', x = 'Step Speed', y = 'Frequency') + theme(plot.title = element_text(hjust = 0.5))
+print(blood_pressure_hist)
+```
+
+## Code for scatterplot of calories burned vs. steps speed from wearables dataset
+```{r}
+nrow(wearables_data)
+covid_wearables_steps_dropped = drop_na(wearables_data, steps_count)
+nrow(covid_wearables_steps_dropped)
+covid_wearables_steps_calories_dropped = drop_na(wearables_data, steps_count, total_calories_burned)
+nrow(covid_wearables_steps_calories_dropped)
+covid_wearables_calories_dropped = drop_na(wearables_data, total_calories_burned)
+nrow(covid_wearables_calories_dropped)
+calories_vs_steps = ggplot(covid_wearables_steps_calories_dropped, aes(x = steps_count, y = total_calories_burned)) + geom_point() + labs(title = 'Total Calories Burned vs. Steps Count', x = 'Steps Count', y = 'Total Calories Burned') + theme(plot.title = element_text(hjust = 0.5))
+print(calories_vs_steps)
+```
