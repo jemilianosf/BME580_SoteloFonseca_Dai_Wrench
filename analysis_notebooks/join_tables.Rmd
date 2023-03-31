@@ -1,0 +1,300 @@
+---
+title: "join_tables"
+output: html_document
+date: '2023-03-28'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Read data
+
+```{r cars}
+# Join tables
+library(tidyverse)
+data_path <- "../hrv-covid19/data/"
+file_names <- list.files(data_path)
+
+hrv_covid19_tables <- map(paste0(data_path, file_names), read_csv)
+
+names(hrv_covid19_tables) <- file_names
+
+scales_description <- hrv_covid19_tables$scales_description.csv
+
+# remove scales descriptions from main tables
+hrv_covid19_tables$scales_description.csv <- NULL
+
+```
+
+# Clean data before joins
+
+```{r}
+# Some observations are duplicated
+hrv_covid19_tables_surveys_duplicates <- hrv_covid19_tables$surveys.csv %>%
+    dplyr::group_by(user_code, created_at, scale) %>%
+    dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+    dplyr::filter(n > 1L)
+
+
+surveys_clean <- hrv_covid19_tables$surveys.csv %>%
+  filter(!user_code %in% hrv_covid19_tables_surveys_duplicates$user_code)
+
+# Pivot wider for surveys table
+surveys_wide <- surveys_clean %>%
+  pivot_wider(id_cols = c("user_code","created_at"),names_from = "scale",values_from = "value",)
+
+# Split date into separate day and time variables, and recode day variables as dates
+hrv_measurements_clean <- hrv_covid19_tables$hrv_measurements.csv %>%
+  separate(measurement_datetime, into = c("day","time"), sep= " ") %>%
+  mutate(day = as.Date(day))
+
+
+heart_rate_clean <- hrv_covid19_tables$heart_rate.csv %>%
+  separate(datetime, into = c("day","time"), sep= " ") %>%
+  mutate(day = as.Date(day))
+
+
+blood_pressure_clean <- hrv_covid19_tables$blood_pressure.csv %>%
+  separate(measurement_datetime, into = c("day","time"), sep= "  ") %>%
+  mutate(day = as.Date(day))
+
+```
+
+# Summarize data before joining
+
+## Pre-process outcome variable 
+
+Select only S_COVID_OVERALL as outcome variable
+```{r}
+surveys_wide_outcome <- surveys_wide %>%
+  select(user_code, created_at, S_COVID_OVERALL)
+```
+
+Filter out observations without user data, and users without symptoms
+```{r}
+surveys_wide_symptomatic_outcome <- surveys_wide_outcome %>%
+  drop_na() %>%
+  filter(S_COVID_OVERALL > 1)
+```
+
+Re-code outcome variable from ordinal scale, to binary severe / not severe classes
+
+```{r}
+surveys_wide_symptomatic_outcome <- 
+  surveys_wide_symptomatic_outcome %>%
+  mutate(symptom_severity = ifelse(S_COVID_OVERALL >= 5, "severe","not_severe"))
+
+surveys_wide_symptomatic_outcome
+```
+
+## Pre-process hrv_measurements table 
+
+Drop columns we won't use
+```{r}
+hrv_measurements_clean <- hrv_measurements_clean %>%
+  select(-rr_code,-time,-time_of_day, -tags)
+```
+
+Summarize hrv_measurements at the user / day level
+
+```{r}
+hrv_measurements_clean_summarised <- hrv_measurements_clean %>%
+  group_by(user_code, day) %>%
+  summarise_all(mean, na.rm=TRUE)
+
+hrv_measurements_clean_summarised$how_sleep[is.nan(hrv_measurements_clean_summarised$how_sleep)] <- NA
+```
+
+## Pre-process heart_rate table 
+Drop columns we won't use
+```{r}
+heart_rate_clean <- heart_rate_clean %>%
+  select(-time)
+```
+
+Summarize hrv_measurements at the user / day level
+
+```{r}
+heart_rate_clean_summarised <- heart_rate_clean %>%
+  group_by(user_code, day, is_resting) %>%
+  summarise(heart_rate = mean(heart_rate)) %>%
+  pivot_wider(id_cols = c("user_code","day"),
+              values_from = "heart_rate",
+              names_from = "is_resting",
+              names_prefix = "heart_rate_is_resting_")
+
+```
+
+## Pre-process blood_pressure table 
+
+Drop unused variables
+
+```{r}
+blood_pressure_clean <- blood_pressure_clean %>%
+  select(-time)
+```
+
+Summarize blood_pressure at the user / day level
+
+```{r}
+blood_pressure_clean_summarised <- blood_pressure_clean %>%
+  group_by(user_code, day) %>%
+  summarise_all(mean, na.rm=TRUE) %>%
+  mutate_if(is.numeric, function(x) ifelse(is.nan(x),NA,x))
+
+```
+
+## Pre-process weather
+
+This table is already summarized at the user / day level. Just double check that we have unique observations for each user / day pair.
+
+```{r}
+weather_nrow <- nrow(hrv_covid19_tables$weather.csv)
+unique_nrow <- hrv_covid19_tables$weather.csv %>%
+  select(user_code,day) %>%
+  unique() %>%
+  nrow()
+
+weather_nrow == unique_nrow
+```
+
+## Pre-process wearables
+
+This table is already summarized at the user / day level. Just double check that we have unique observations for each user / day pair.
+
+```{r}
+wearables_nrow <- nrow(hrv_covid19_tables$wearables.csv)
+wearables_unique_nrow <- hrv_covid19_tables$wearables.csv %>%
+  select(user_code,day) %>%
+  unique() %>%
+  nrow()
+
+wearables_nrow == wearables_unique_nrow
+```
+
+## Pre-process sleep
+```{r}
+hrv_covid19_tables$sleep.csv
+```
+```{r}
+sleep_nrow <- nrow(hrv_covid19_tables$sleep.csv)
+sleep_unique_nrow <- hrv_covid19_tables$sleep.csv %>%
+  select(user_code,day) %>%
+  unique() %>%
+  nrow()
+
+sleep_nrow == sleep_unique_nrow
+```
+
+Which are duplicated?
+```{r}
+unique(hrv_covid19_tables$sleep.csv)
+
+sleep_duplicated <- hrv_covid19_tables$sleep.csv %>%
+  select(user_code, day) %>%
+  duplicated()
+
+sleep_dup_users_day <- hrv_covid19_tables$sleep.csv %>%
+  filter(sleep_duplicated) %>%
+  select(user_code, day) %>%
+  mutate(user_code_day = paste(user_code, day))
+
+hrv_covid19_tables$sleep.csv %>%
+  mutate(user_code_day = paste(user_code, day))  %>%
+  filter(user_code_day %in% sleep_dup_users_day$user_code_day)
+  
+```
+Some people have different sleep_begin and sleep_end values, but since we are not using this info, just remove the columns and get unique rows. 
+
+```{r}
+sleep_clean <- hrv_covid19_tables$sleep.csv %>%
+  select(-sleep_begin, -sleep_end) %>%
+  unique()
+```
+
+Double check that user code / day are unique
+
+```{r}
+sleep_nrow <- nrow(sleep_clean)
+sleep_unique_nrow <- sleep_clean %>%
+  select(user_code,day) %>%
+  unique() %>%
+  nrow()
+
+sleep_nrow == sleep_unique_nrow
+```
+
+## Pre-process participants
+
+Participants are already summarized at the user/day level. Just double check that observations are unique.
+
+```{r}
+nrow(hrv_covid19_tables$participants.csv) == nrow(unique(hrv_covid19_tables$participants.csv))
+```
+
+# Join tables
+
+Before joining, change data columns to make it easier to remember where each column came from.
+```{r}
+names(surveys_wide_symptomatic_outcome) <- paste0("outcome_",names(surveys_wide_symptomatic_outcome))
+names(hrv_covid19_tables$participants.csv) <- paste0("participants_",names(hrv_covid19_tables$participants.csv) )
+names(sleep_clean) <- paste0("sleep_",names(sleep_clean))
+names(hrv_covid19_tables$wearables.csv) <- paste0("wearables_",names(hrv_covid19_tables$wearables.csv))
+names(hrv_covid19_tables$weather.csv) <- paste0("weather_",names(hrv_covid19_tables$weather.csv))
+names(hrv_measurements_clean_summarised) <- paste0("hrv_",names(hrv_measurements_clean_summarised))
+names(blood_pressure_clean_summarised) <- paste0("bloodpressure_",names(blood_pressure_clean_summarised) )
+names(heart_rate_clean_summarised) <- paste0("heartrate_",names(heart_rate_clean_summarised))
+```
+
+
+
+```{r}
+surveys_wide_join <- left_join(surveys_wide_symptomatic_outcome,hrv_covid19_tables$participants.csv, by = c("outcome_user_code" = "participants_user_code"))
+
+surveys_wide_join <- left_join(surveys_wide_join,sleep_clean, by = c("outcome_user_code" = "sleep_user_code",
+                                                                                                            "outcome_created_at" = "sleep_day"))
+
+surveys_wide_join <- left_join(surveys_wide_join,hrv_covid19_tables$wearables.csv, by = c("outcome_user_code" = "wearables_user_code",
+                                                                                                            "outcome_created_at" = "wearables_day"))
+
+surveys_wide_join <- left_join(surveys_wide_join,hrv_covid19_tables$weather.csv, by = c("outcome_user_code" = "weather_user_code",
+                                                                                                            "outcome_created_at" = "weather_day"))
+
+surveys_wide_join <- left_join(surveys_wide_join,hrv_measurements_clean_summarised, by = c("outcome_user_code" = "hrv_user_code",
+                                                                                                            "outcome_created_at" = "hrv_day"))
+
+surveys_wide_join <- left_join(surveys_wide_join,blood_pressure_clean_summarised, by = c("outcome_user_code" = "bloodpressure_user_code",
+                                                                                                            "outcome_created_at" = "bloodpressure_day"))
+
+surveys_wide_join <- left_join(surveys_wide_join,heart_rate_clean_summarised, by = c("outcome_user_code" = "heartrate_user_code",
+                                                                                                            "outcome_created_at" = "heartrate_day"))
+
+```
+## Convert relevant variables as factors
+
+
+Convert characters to factors
+
+```{r}
+surveys_wide_join <- surveys_wide_join %>%
+  mutate_if(is.character, as.factor)
+```
+
+Convert ordinal outcome to ordered
+
+```{r}
+surveys_wide_join <- surveys_wide_join %>%
+  mutate(outcome_S_COVID_OVERALL = as.ordered(outcome_S_COVID_OVERALL))
+
+```
+
+# Alternative data table, for data exploration purposes
+
+
+
+
+
+
+
+
