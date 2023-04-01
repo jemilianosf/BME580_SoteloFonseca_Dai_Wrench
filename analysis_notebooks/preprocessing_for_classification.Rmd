@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r cars}
 # Join tables
 library(tidyverse)
-data_path <- "../hrv-covid19/data/"
+data_path <- "../../hrv-covid19/data/"
 file_names <- list.files(data_path)
 
 hrv_covid19_tables <- map(paste0(data_path, file_names), read_csv)
@@ -286,6 +286,20 @@ Convert ordinal outcome to ordered
 ```{r}
 surveys_wide_join <- surveys_wide_join %>%
   mutate(outcome_S_COVID_OVERALL = as.ordered(outcome_S_COVID_OVERALL))
+
+```
+
+# Split
+```{r}
+set.seed(42)
+train_idx <- caret::createDataPartition(y = surveys_wide_join$outcome_symptom_severity, p = .8, list = F)
+surveys_wide_join_train_data <- surveys_wide_join[train_idx,]
+surveys_wide_join_test_data <- surveys_wide_join[-train_idx,]
+```
+
+```{r}
+write_tsv(surveys_wide_join_train_data,"../data_clean/surveys_wide_join_train_data.tsv")
+write_tsv(surveys_wide_join_test_data,"../data_clean/surveys_wide_join_test_data.tsv")
 
 ```
 
