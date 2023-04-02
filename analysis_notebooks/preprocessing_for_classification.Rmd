@@ -303,12 +303,51 @@ write_tsv(surveys_wide_join_test_data,"../data_clean/surveys_wide_join_test_data
 
 ```
 
-# Alternative data table, for data exploration purposes
+# Alternative data table, for unsupervised approach purposes
+
+Joining full hrv data table w/o summarization to survey and other participant data.  
+
+```{r}
+hrv_measurements_clean_full <- hrv_covid19_tables$hrv_measurements.csv %>%
+  separate(measurement_datetime, into = c("day","time"), sep= " ") %>%
+  mutate(day = as.Date(day))
+
+```
+
+```{r}
+colnames(surveys_wide) <- paste0("surveys_", colnames(surveys_wide))
+colnames(hrv_measurements_clean_full) <- paste0("hrv_", colnames(hrv_measurements_clean_full))
+
+```
 
 
+Join surveys and participant data (summarized per user /day)
+```{r}
+surveys_hrv_join <- left_join(surveys_wide,hrv_covid19_tables$participants.csv, by = c("surveys_user_code" = "participants_user_code"))
+
+surveys_hrv_join <- left_join(surveys_hrv_join,sleep_clean, by = c("surveys_user_code" = "sleep_user_code",
+                                                                                                            "surveys_created_at" = "sleep_day"))
+
+surveys_hrv_join <- left_join(surveys_hrv_join,hrv_covid19_tables$wearables.csv, by = c("surveys_user_code" = "wearables_user_code",
+                                                                                                            "surveys_created_at" = "wearables_day"))
+
+surveys_hrv_join <- left_join(surveys_hrv_join,hrv_covid19_tables$weather.csv, by = c("surveys_user_code" = "weather_user_code",
+                                                                                                            "surveys_created_at" = "weather_day"))
+
+```
+
+Join 
+
+```{r}
+
+surveys_hrv_join <- left_join(hrv_measurements_clean_full,surveys_hrv_join, by = c("hrv_user_code" = "surveys_user_code",
+                                                                                                "hrv_day" = "surveys_created_at"))
+```
 
 
+```{r}
+write_tsv(surveys_hrv_join,"../data_clean/surveys_hrv_join.tsv")
 
-
+```
 
 
