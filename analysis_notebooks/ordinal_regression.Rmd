@@ -1,0 +1,133 @@
+---
+title: "ordinal_regression"
+output: html_document
+date: '2023-04-02'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+```{r}
+library(tidyverse)
+library(MASS)
+```
+
+# Read data
+```{r}
+surveys_wide_join_train_data <- read_tsv("../data_clean/surveys_wide_join_train_data.tsv")
+```
+
+# Pre-process
+
+Remove variables not to use in the model 
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data %>%
+  dplyr::select(-outcome_symptom_severity, - participants_symptoms_onset, - participants_country, - participants_city)
+```
+
+Recode outcome to ordered
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  mutate(outcome_S_COVID_OVERALL = as.ordered(outcome_S_COVID_OVERALL))
+```
+
+
+Explore NA values
+```{r}
+na_proportion_per_feature <- (map_dbl(surveys_wide_join_train_data_clean, function(x) sum(is.na(x))) / nrow(surveys_wide_join_train_data_clean)) 
+
+
+na_proportion_per_feature %>%
+  enframe() %>%
+  ggplot(aes(value)) +
+  geom_histogram() +
+  theme_light() +
+  theme(aspect.ratio = 1) +
+  ggtitle("Proportion of NA values per feature")
+```
+
+Remove features with > 60% NA values
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  select_if(na_proportion_per_feature < 0.6)
+```
+
+Just use mean imputation for now
+
+Start with per person mean imputation
+
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  group_by(outcome_user_code) %>%
+  mutate_if(is.numeric,~ ifelse(is.na(.),mean(., na.rm = TRUE),.)) 
+```
+
+If a person does not have a value, then impute by global mean
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  ungroup() %>%
+  mutate_if(is.numeric,~ ifelse(is.nan(.),mean(., na.rm = TRUE),.)) 
+```
+
+If a person does not have a value, then impute by global mean
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  mutate_if(is.numeric,~ ifelse(is.infinite(.),mean(., na.rm = TRUE),.)) 
+
+```
+
+Many inf values in rr data, so drop for now
+```{r}
+sapply(surveys_wide_join_train_data_clean,function(x) any(is.infinite(x)))
+
+```
+
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  dplyr::select(-hrv_rr_data)
+
+```
+
+Correlations between variables
+```{r}
+corrplot::corrplot(cor(surveys_wide_join_train_data_clean %>%
+      select_if(is.numeric)))
+```
+
+REmove correlated vars 
+
+```{r}
+hrv_vars_to_keep <- surveys_wide_join_train_data_clean %>%
+  dplyr::select(hrv_total_power,hrv_how_feel,hrv_how_mood, hrv_how_sleep, hrv_vlf, hrv_lfhf)
+
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  dplyr::select(!starts_with("hrv"))
+surveys_wide_join_train_data_clean <- cbind(surveys_wide_join_train_data_clean, hrv_vars_to_keep)
+
+```
+
+
+REmove observation ids
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  dplyr::select(-outcome_user_code, -outcome_created_at)
+```
+
+
+# Ordered logistic regression
+
+Conducting an ordered logistic regression with the polyr function from the MASS package
+
+```{r}
+m <- polr(outcome_S_COVID_OVERALL ~ ., data = surveys_wide_join_train_data_clean, Hess=TRUE)
+
+```
+
+# Predict classes
+
+```{r}
+table(predict(m,newdata = surveys_wide_join_train_data_clean), surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL)
+```
+
