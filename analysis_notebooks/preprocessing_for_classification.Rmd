@@ -297,11 +297,118 @@ surveys_wide_join_train_data <- surveys_wide_join[train_idx,]
 surveys_wide_join_test_data <- surveys_wide_join[-train_idx,]
 ```
 
-```{r}
+```{r eval = FALSE}
 write_tsv(surveys_wide_join_train_data,"../data_clean/surveys_wide_join_train_data.tsv")
 write_tsv(surveys_wide_join_test_data,"../data_clean/surveys_wide_join_test_data.tsv")
 
 ```
+
+# Clean data  
+
+# Pre-process
+
+Remove variables not to use in the model 
+```{r}
+surveys_wide_join_clean <- surveys_wide_join %>%
+  dplyr::select(- participants_symptoms_onset, - participants_country, - participants_city)
+```
+
+Re-code outcome to ordered
+```{r}
+surveys_wide_join_clean <- surveys_wide_join_clean %>%
+  mutate(outcome_S_COVID_OVERALL = as.ordered(outcome_S_COVID_OVERALL))
+```
+
+
+Explore NA values
+```{r}
+na_proportion_per_feature <- (map_dbl(surveys_wide_join_clean, function(x) sum(is.na(x))) / nrow(surveys_wide_join_clean)) 
+
+
+na_proportion_per_feature %>%
+  enframe() %>%
+  ggplot(aes(value)) +
+  geom_histogram() +
+  theme_light() +
+  theme(aspect.ratio = 1) +
+  ggtitle("Proportion of NA values per feature")
+```
+
+Remove features with > 60% NA values
+```{r}
+surveys_wide_join_clean <- surveys_wide_join_clean %>%
+  select_if(na_proportion_per_feature < 0.6)
+```
+
+Just use mean imputation for now
+
+Start with per person mean imputation
+
+```{r}
+surveys_wide_join_clean <- surveys_wide_join_clean %>%
+  group_by(outcome_user_code) %>%
+  mutate_if(is.numeric,~ ifelse(is.na(.),mean(., na.rm = TRUE),.)) 
+```
+
+If a person does not have a value, then impute by global mean
+```{r}
+surveys_wide_join_clean <- surveys_wide_join_clean %>%
+  ungroup() %>%
+  mutate_if(is.numeric,~ ifelse(is.nan(.),mean(., na.rm = TRUE),.)) 
+```
+
+If a person does not have a value, then impute by global mean
+```{r}
+surveys_wide_join_clean <- surveys_wide_join_clean %>%
+  mutate_if(is.numeric,~ ifelse(is.infinite(.),mean(., na.rm = TRUE),.)) 
+
+```
+
+Many inf values in rr data, so drop for now
+```{r}
+sapply(surveys_wide_join_clean,function(x) any(is.infinite(x)))
+
+```
+
+```{r}
+surveys_wide_join_clean <- surveys_wide_join_clean %>%
+  dplyr::select(-hrv_rr_data)
+
+```
+
+Correlations between variables
+```{r}
+corrplot::corrplot(cor(surveys_wide_join_clean %>%
+      select_if(is.numeric)))
+```
+
+Remove correlated vars 
+
+```{r}
+hrv_vars_to_keep <- surveys_wide_join_clean %>%
+  dplyr::select(hrv_total_power,hrv_how_feel,hrv_how_mood, hrv_how_sleep, hrv_vlf, hrv_lfhf)
+
+surveys_wide_join_clean <- surveys_wide_join_clean %>%
+  dplyr::select(!starts_with("hrv"))
+surveys_wide_join_clean <- cbind(surveys_wide_join_clean, hrv_vars_to_keep)
+
+```
+
+## Split train / test
+
+```{r}
+set.seed(42)
+train_idx <- caret::createDataPartition(y = surveys_wide_join_clean$outcome_symptom_severity, p = .8, list = F)
+surveys_wide_join_train_data_clean <- surveys_wide_join_clean[train_idx,]
+surveys_wide_join_test_data_clean <- surveys_wide_join_clean[-train_idx,]
+```
+
+```{r eval = FALSE}
+write_tsv(surveys_wide_join_train_data_clean,"../data_clean/surveys_wide_join_train_data.tsv")
+write_tsv(surveys_wide_join_test_data_clean,"../data_clean/surveys_wide_join_test_data.tsv")
+
+```
+
 
 # Alternative data table, for unsupervised approach purposes
 
@@ -350,4 +457,12 @@ write_tsv(surveys_hrv_join,"../data_clean/surveys_hrv_join.tsv")
 
 ```
 
+
+```{r}
+library(tidyverse)
+
+surveys_hrv_join <- read_tsv("../data_clean/surveys_hrv_join.tsv")
+
+head(surveys_hrv_join)
+```
 
