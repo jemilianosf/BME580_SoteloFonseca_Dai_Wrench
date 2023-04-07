@@ -1,0 +1,415 @@
+---
+title: "Project_Classification_Models"
+author: "Doreen Haoran Dai"
+date: "2023-04-01"
+output: 
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(utils)
+library(MASS)
+library(ROCR)
+library(caret)
+library(gmodels)
+library(class) # Knn algorithm
+library(patchwork)
+library(psych)
+library(dplyr)
+library(reshape2)
+
+set.seed(580)
+```
+
+```{r}
+# load clean data sets 
+path_join <- '/Users/doreenmacpro/Downloads/BME580_project/data_clean/surveys_hrv_join.tsv'
+df_join <- read_delim(path_join,show_col_types = FALSE)
+path_join_train <- '/Users/doreenmacpro/Downloads/BME580_project/data_clean/surveys_wide_join_train_data_clean_temp.tsv'
+df_train <- read_delim(path_join_train,show_col_types = FALSE) 
+path_join_test <- '/Users/doreenmacpro/Downloads/BME580_project/data_clean/surveys_wide_join_test_data.tsv'
+df_test <- read_delim(path_join_test,show_col_types = FALSE) 
+
+# show the head of these sets 
+#print(head(df_join))
+print(df_train)
+print(df_test)
+
+# let's see the dimensionality 
+# dimensionality:
+dim_join = dim(df_join)
+print('Dimensionality for join data')
+print(dim_join)
+dim_train = dim(df_train)
+print('Dimensionality for train data')
+print(dim_train)
+dim_test = dim(df_test)
+print('Dimensionality for test data')
+print(dim_test)
+```
+```{r}
+df_combined <- df_train
+# remove unnecessary columns
+# df_train_edited <- df_train %>% dplyr::select(-outcome_user_code)
+# print(df_train_edited)
+# df_test_edited <- df_test %>% dplyr::select(-outcome_user_code)
+# print(df_test_edited)
+# df_combined_edited <- df_combined %>% dplyr::select(-outcome_user_code,-outcome_created_at)
+
+# add severity level 
+
+df_combined$outcome_severity <- ifelse(df_combined$outcome_S_COVID_OVERALL >= 5, "severe", "not_severe")
+df_combined$outcome_severity <- as.factor(df_combined$outcome_severity)
+
+df_combined_edited <- df_combined
+print(df_combined_edited)
+
+# classification outcome should be outcome_symptom_severity
+# let's eliminate the outcome_S_COVID_OVERALL first 
+
+df_combined_class <- df_combined_edited %>% dplyr::select(-outcome_S_COVID_OVERALL)
+print(df_combined_class)
+
+```
+```{r}
+na_counts <- colSums(is.na(df_combined_class))
+print(na_counts)
+```
+
+```{r}
+# eliminate all NAs 
+#df_combined_class <- df_combined_class%>% drop_na()
+
+# Replace all NA in each column with the column mean 
+# df_combined_class_2 <- df_combined_class
+# for(i in 1:ncol(df_combined_class)) {                                   # Replace NA in all columns
+#   df_combined_class_2[ , i][is.numeric(is.na(df_combined_class_2[ , i]))] <- mean(df_combined_class_2[ , i], na.rm = TRUE)
+# }
+# print(df_combined_class_2)
+
+# scale all the numeric features 
+df_combined_numericfeatures <- select_if(df_combined_class,is.numeric)
+# scale the numeric features of the cardio data set
+numericdfcombined_scaled <- as.data.frame(scale(df_combined_numericfeatures))
+print(head(numericdfcombined_scaled))
+# add outcome column to the scaled numeric features 
+dfcombined_scaled <- numericdfcombined_scaled %>% 
+  bind_cols("outcome_severity" = df_combined_class$outcome_severity)
+print(head(dfcombined_scaled))
+```
+```{r}
+split_ind_dfcombined <- createDataPartition(y = dfcombined_scaled$outcome_severity, 
+                                       p = .8, list = F)
+train_join = dfcombined_scaled[split_ind_dfcombined,]
+test_join = dfcombined_scaled[-split_ind_dfcombined,]
+```
+
+```{r}
+# LDA model directly on test set 
+ldaMod <- lda(outcome_severity ~., data = train_join)
+print(ldaMod)
+
+lda_predicted_possiblities_1 <- predict(ldaMod, newdata = test_join, 
+                                               type='response')$posterior[,2]
+
+# step 1: create a prediction object 
+predictions_lda_test_1 <- prediction(lda_predicted_possiblities_1,
+                                        test_join$outcome_severity)
+
+# step 2: calculate the ROC curve and AUC
+roc_lda1 <- performance(predictions_lda_test_1,measure="tpr",
+                                 x.measure="fpr")
+auc_lda1 <- performance(predictions_lda_test_1,measure="auc")
+
+# plot the ROC curve
+plot(roc_lda1,main="LDA Model ROC curve (cardio data)",col="black",
+     lwd = 2)
+abline(0,1,lty=2,col="gray")
+
+# print the overall are under the curve (namely, AUC)
+print(sprintf("LDA Model AUC is: %f",auc_lda1@y.values[[1]]))
+```
+```{r}
+# LDA with K-fold Cross Validation
+num_folds <- 5
+train_set <- dfcombined_scaled
+folds <- createFolds(train_set$outcome_severity, k = num_folds)
+sapply(folds,length)
+
+matrix_lda_kCV <- matrix(nrow = num_folds, ncol = 7)
+
+best_lda_model <- NULL
+best_val_acc <- 0
+
+for (i in 1:num_folds) {
+  # get the training and validation sets for this fold
+  train_fold <- train_set[-folds[[i]], ]
+  valid_fold <- train_set[folds[[i]], ]
+  
+  # fit the LDA model on the training set for this fold
+  lda_model <- lda(outcome_severity ~., data = train_fold)
+  
+  # test the model on train_fold  
+  ldaPred_train = predict(lda_model, train_fold)
+  predClass_train = ldaPred_train$class
+  confusionTab_train = table(Predicted = predClass_train, 
+                                  Actual = train_fold$outcome_severity)
+
+  # test the model on val_fold
+  ldaPred_val = predict(lda_model, valid_fold)
+  predClass_val = ldaPred_val$class
+  confusionTab_val = table(Predicted = predClass_val, 
+                                 Actual = valid_fold$outcome_severity)
+  
+  matrix_lda_kCV[i,1] <- i
+  # evaluate the accuracy for each fold 
+  # calculate misclassification rate and precision for training data
+  misclass_train <- 1-(sum(diag(confusionTab_train))/
+                              sum(confusionTab_train))
+  #print(sprintf("misclassification rate for training data is: %f",misclass_train))
+  matrix_lda_kCV[i,2] <- misclass_train
+
+  precision_train <- confusionTab_train[2,2]/(confusionTab_train[2,2]+
+                                                 confusionTab_train[1,2])
+  #print(sprintf("precision for training data is: %f",precision_train))
+  matrix_lda_kCV[i,3] <- precision_train
+
+  accuracy_train <- 1-misclass_train
+  #print(sprintf("accuracy for training data is: %f",accuracy_train))
+  matrix_lda_kCV[i,4] <- accuracy_train
+
+  # calculate misclassification rate and precision for test data
+  misclass_val <- 1-(sum(diag(confusionTab_val))/
+                              sum(confusionTab_val))
+  #print(sprintf("misclassification rate for test data is: %f",misclass_val))
+  matrix_lda_kCV[i,5] <- misclass_val
+
+  precision_val <- confusionTab_val[2,2]/(confusionTab_val[2,2]+
+                                                 confusionTab_val[1,2])
+  #print(sprintf("precision for test data is: %f",precision_val))
+  matrix_lda_kCV[i,6] <- precision_val
+
+  accuracy_val <- 1-misclass_val
+  #print(sprintf("accuracy for test data is: %f",accuracy_val))
+  matrix_lda_kCV[i,7] <- accuracy_val
+  
+  if (accuracy_val > best_val_acc){
+    best_lda_model <- lda_model # pick the best model among all folds
+    best_val_acc <- accuracy_val
+  }
+}
+
+print(paste("best validation accuracy:", best_val_acc))
+```
+
+```{r}
+#print(matrix_lda_kCV)
+df_lda_kCV <- as.data.frame(matrix_lda_kCV)
+names(df_lda_kCV)[names(df_lda_kCV) == "V1"] <- "Fold #"
+names(df_lda_kCV)[names(df_lda_kCV) == "V2"] <- "train_misclass"
+names(df_lda_kCV)[names(df_lda_kCV) == "V3"] <- "train_precision"
+names(df_lda_kCV)[names(df_lda_kCV) == "V4"] <- "train_accuracy"
+names(df_lda_kCV)[names(df_lda_kCV) == "V5"] <- "val_misclass"
+names(df_lda_kCV)[names(df_lda_kCV) == "V6"] <- "val_precision"
+names(df_lda_kCV)[names(df_lda_kCV) == "V7"] <- "val_accuracy"
+print(df_lda_kCV)
+print(paste("mean accuracy for validation set cross all folds is:", mean(df_lda_kCV$val_accuracy)))
+```
+```{r}
+# ROC and AUC for the best LDA model based on K-fold Cross Validation
+print(best_lda_model)
+lda_predicted_possiblities <- predict(best_lda_model, newdata = test_join, 
+                                               type='response')$posterior[,2]
+
+# step 1: create a prediction object 
+predictions_lda_test <- prediction(lda_predicted_possiblities,
+                                        test_join$outcome_severity)
+
+# step 2: calculate the ROC curve and AUC
+roc_lda <- performance(predictions_lda_test,measure="tpr",
+                                 x.measure="fpr")
+auc_lda <- performance(predictions_lda_test,measure="auc")
+
+# plot the ROC curve
+plot(roc_lda,main="kCV LDA Model ROC curve",col="black",
+     lwd = 2)
+abline(0,1,lty=2,col="gray")
+
+# print the overall are under the curve (namely, AUC)
+print(sprintf("LDA Model AUC is: %f",auc_lda@y.values[[1]]))
+```
+```{r}
+# convert outcome_severity to numeric numbers
+train_join_numeric_output <- train_join
+test_join_numeric_output <- test_join
+train_join_numeric_output$outcome_severity <- ifelse(train_join$outcome_severity == "not_severe", 0, 1) 
+test_join_numeric_output$outcome_severity <- ifelse(test_join$outcome_severity == "not_severe", 0, 1)
+```
+```{r}
+# Logistic Model Data preparation
+
+
+# Logistic Model directly apply on test set
+logModel1 = glm(outcome_severity ~., family = binomial, data = train_join_numeric_output)
+
+logfit_predicted_possiblities1 <- predict(logModel1, newdata = test_join_numeric_output, 
+                                               type='response')
+# step 1: create a prediction object 
+predictions_logMod1_test <- prediction(logfit_predicted_possiblities1,
+                                        test_join_numeric_output$outcome_severity)
+
+# step 2: calculate the ROC curve and AUC
+roc_logMod1 <- performance(predictions_logMod1_test,measure="tpr",
+                                 x.measure="fpr")
+auc_logMod1 <- performance(predictions_logMod1_test,measure="auc")
+
+# plot the ROC curve
+plot(roc_logMod1,main="Log Model ROC curve ",col="black",
+     lwd = 2)
+abline(0,1,lty=2,col="gray")
+
+# print the overall are under the curve (namely, AUC)
+print(sprintf("Log Model AUC is: %f",auc_logMod1@y.values[[1]]))
+
+logfit_val <- ifelse(logfit_predicted_possiblities1 > 0.5, 1, 0)
+misclassification_logfit_val <- (sum(logfit_val != test_join_numeric_output$outcome_severity)/
+                                   length(test_join_numeric_output$outcome_severity))
+print(sprintf("misclassification rate of log model for test data is: %f",
+            misclassification_logfit_val))
+ 
+accuracy_logfit_val <- 1-((sum(logfit_val != test_join_numeric_output$outcome_severity)/
+                                   length(test_join_numeric_output$outcome_severity)))
+print(sprintf("accuracy of log model for test data is: %f",
+            accuracy_logfit_val))
+  
+```
+
+
+
+```{r}
+# kCV Logistic Model
+num_folds <- 5
+dfcombined_scaled_numeric_output <- dfcombined_scaled
+dfcombined_scaled_numeric_output$output_severity <- ifelse(dfcombined_scaled$outcome_severity == "not_severe", 0, 1) 
+  
+train_set <- dfcombined_scaled_numeric_output
+print(train_set)
+folds <- createFolds(train_set$outcome_severity, k = num_folds)
+sapply(folds,length)
+
+matrix_logMod_kCV <- matrix(nrow = num_folds, ncol = 7)
+
+best_log_model <- NULL
+best_log_val_acc <- 0
+
+for (i in 1:num_folds) {
+  # get the training and validation sets for this fold
+  train_fold <- train_set[-folds[[i]], ]
+  valid_fold <- train_set[folds[[i]], ]
+  
+  # fit the log model on the training set for this fold
+  log_model <- glm(outcome_severity ~., family = binomial, data = train_fold)
+  
+  # test the model on train_fold  
+  logPred_train = predict(log_model, new_data = train_fold, type='response')
+  logfit_val <- ifelse(logPred_train > 0.5, 1, 0)
+
+  # test the model on val_fold
+  logPred_val = predict(log_model, new_data = valid_fold, type='response')
+  logfit_val <- ifelse(logPred_val > 0.5, 1, 0)
+  
+  matrix_logMod_kCV[i,1] <- i
+ 
+  # calculate misclassification rate and accuracy 
+  logfit_val <- ifelse(logPred_train > 0.5, 1, 0)
+  misclassification_logfit_val <- (sum(logfit_val != valid_fold$outcome_severity)/
+                                   length(valid_fold$outcome_severity))
+  print(sprintf("misclassification rate of log model for test data is: %f",
+            misclassification_logfit_val))
+  matrix_logMod_kCV[i,2] <- misclassification_logfit_val
+  
+  accuracy_logfit_val <- 1-((sum(logfit_val != valid_fold$outcome_severity)/
+                                   length(valid_fold$outcome_severity)))
+  print(sprintf("accuracy of log model for test data is: %f",
+            accuracy_logfit_val))
+  matrix_logMod_kCV[i,3] <- accuracy_logfit_val
+  
+  if (accuracy_val > best_val_acc){
+    best_log_model <- log_model # pick the best model among all folds
+    best_log_val_acc <- accuracy_val
+  }
+}
+
+print(paste("best validation accuracy:", best_log_val_acc))
+
+```
+
+```{r}
+df_log_kCV <- as.data.frame(matrix_logMod_kCV)
+names(df_log_kCV)[names(df_log_kCV) == "V1"] <- "Fold #"
+names(df_log_kCV)[names(df_log_kCV) == "V2"] <- "val_misclass"
+names(df_log_kCV)[names(df_log_kCV) == "V3"] <- "val_precision"
+print(df_log_kCV)
+print(paste("mean accuracy for validation set cross all folds is:", mean(df_log_kCV$val_accuracy)))
+```
+
+
+```{r}
+# SVM attempt 
+library(e1071) # Includes SVM function
+library(caret) # Includes functions we'll use for hyperparameter tuning
+library(tidyverse)
+library(gmodels) # CrossTable()
+
+data <- dfcombined_scaled
+data %>% count(outcome_severity)
+# SVMs work by projecting each observation into a higher dimensional space, then
+# identifying a hyperplane capable of separating the classes. As a result, the
+# model can be negatively impacted by differing measurement scales between
+# features. We can solve this by scaling our data
+
+#scaleDf = data %>% mutate(across(-Class, scale)) %>% mutate_at("Class", as.factor)
+
+split_ind = createDataPartition(data$outcome_severity, p=0.8, list = F)
+train = data[split_ind,]
+test = data[-split_ind,]
+
+print(train)
+
+svmMod = svm(outcome_severity~., data = train, type = 'C', cost = 100,
+             kernel =  'linear')
+
+# We can plot a 2D representation of the results using the plot function
+plot(x=svmMod, data = train, formula = hrv_lfhf~wearables_pulse_max)
+
+plot(x=svmMod, data = train, formula = wearables_resting_pulse~wearables_pulse_max)
+
+print(svmMod)
+
+svmPred_test = predict(svmMod, new_data = test, type='response')
+
+
+# To do: 
+# 1. To see which two variables contribute the most in the classification process
+# 2. Cleaner testing data
+# 3. How to group variables such that there are two combined variables that could give 
+# us a hyperplane correctly classifying the severity 
+
+
+# To do:
+# 1. debug logistic
+# 2. drop variables 
+# 3. try clusters 
+
+
+```
+
+```{r}
+# SVM kCV
+
+
+```
