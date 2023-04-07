@@ -404,8 +404,8 @@ surveys_wide_join_test_data_clean <- surveys_wide_join_clean[-train_idx,]
 ```
 
 ```{r eval = FALSE}
-write_tsv(surveys_wide_join_train_data_clean,"../data_clean/surveys_wide_join_train_data.tsv")
-write_tsv(surveys_wide_join_test_data_clean,"../data_clean/surveys_wide_join_test_data.tsv")
+write_tsv(surveys_wide_join_train_data_clean,"../data_clean/surveys_wide_join_train_data_clean.tsv")
+write_tsv(surveys_wide_join_test_data_clean,"../data_clean/surveys_wide_join_test_data_clean.tsv")
 
 ```
 
