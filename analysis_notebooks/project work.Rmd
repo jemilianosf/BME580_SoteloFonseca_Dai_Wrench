@@ -1,0 +1,46 @@
+---
+title: "project"
+author: "Andrew Wrench"
+output: html_document
+---
+```{r}
+library('psych')
+library('ggplot2')
+library('gridExtra')
+library('ggcorrplot')
+library('factoextra')
+library('cluster')
+library('NbClust')
+library('dendextend')
+```
+
+```{r}
+hrv_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/hrv_measurements.csv')
+print(hrv_data)
+```
+
+```{r}
+pairs.panels(hrv_data[5:17])
+```
+
+```{r}
+hrv_data_scaled = scale(hrv_data[5:17])
+hrv_data_scaled_pca = prcomp(hrv_data_scaled)
+summary(hrv_data_scaled_pca)
+hrv_data_scaled_kmeans = kmeans(hrv_data_scaled, centers = 2)
+hrv_data_scaled_kmeans_plot = fviz_cluster(hrv_data_scaled_kmeans, data = hrv_data_scaled) + labs(x = 'PC1', y = 'PC2', title = 'Cluster Plot for HRV values') + theme(plot.title = element_text(hjust = 0.5))
+print(hrv_data_scaled_kmeans_plot)
+```
+
+```{r}
+howfeel_hist = ggplot(hrv_data, aes(x=how_feel)) + geom_histogram()
+print(howfeel_hist)
+```
+
+```{r}
+hrv_data_outcomes <- 
+  hrv_data %>%
+  mutate(how_feel = ifelse(how_feel >= 0, "severe","not_severe"))
+table(hrv_data_scaled_kmeans$cluster, hrv_data_outcomes$how_feel)
+
+```
