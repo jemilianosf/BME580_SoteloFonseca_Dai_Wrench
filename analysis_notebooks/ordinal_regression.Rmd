@@ -8,112 +8,73 @@ date: '2023-04-02'
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Aims
+
+# Resources
+
+https://stats.oarc.ucla.edu/r/dae/ordinal-logistic-regression/
+
+https://stats.stackexchange.com/questions/493254/why-ordinal-target-in-classification-problems-need-special-attention
+
 # Libraries
 ```{r}
 library(tidyverse)
 library(MASS)
+library(ROCR)
 ```
 
 # Read data
 ```{r}
-surveys_wide_join_train_data <- read_tsv("../data_clean/surveys_wide_join_train_data.tsv")
+surveys_wide_join_train_data_clean <- read_tsv("../data_clean/surveys_wide_join_train_data_clean.tsv")
 ```
 
-# Pre-process
 
-Remove variables not to use in the model 
+Remove observation ids
 ```{r}
-surveys_wide_join_train_data_clean <- surveys_wide_join_train_data %>%
-  dplyr::select(-outcome_symptom_severity, - participants_symptoms_onset, - participants_country, - participants_city)
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  dplyr::select(-outcome_user_code, -outcome_created_at)
 ```
 
-Recode outcome to ordered
+Re-code  outcome as ordered 
 ```{r}
 surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
   mutate(outcome_S_COVID_OVERALL = as.ordered(outcome_S_COVID_OVERALL))
 ```
 
-
-Explore NA values
+Drop binary outcome version
 ```{r}
-na_proportion_per_feature <- (map_dbl(surveys_wide_join_train_data_clean, function(x) sum(is.na(x))) / nrow(surveys_wide_join_train_data_clean)) 
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  dplyr::select(-outcome_symptom_severity)
 
+colnames(surveys_wide_join_train_data_clean)
+```
 
-na_proportion_per_feature %>%
-  enframe() %>%
-  ggplot(aes(value)) +
+Recode how feel answers as ordinal
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  mutate_at(vars(contains("how")), round) %>%
+  mutate_at(vars(contains("how")), as.ordered)
+```
+
+Scale numeric variables
+```{r}
+surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
+  mutate_if(is.numeric, scale)
+```
+
+# Basic data exploration
+
+Distributions of numeric variables
+
+```{r}
+surveys_wide_join_train_data_clean %>%
+  select_if(is.numeric) %>%
+  pivot_longer(cols = everything(), names_to = "feature", values_to = "value") %>%
+  ggplot(aes(value)) + 
   geom_histogram() +
-  theme_light() +
-  theme(aspect.ratio = 1) +
-  ggtitle("Proportion of NA values per feature")
+  facet_wrap(~feature,scales = "free")
 ```
 
-Remove features with > 60% NA values
-```{r}
-surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
-  select_if(na_proportion_per_feature < 0.6)
-```
-
-Just use mean imputation for now
-
-Start with per person mean imputation
-
-```{r}
-surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
-  group_by(outcome_user_code) %>%
-  mutate_if(is.numeric,~ ifelse(is.na(.),mean(., na.rm = TRUE),.)) 
-```
-
-If a person does not have a value, then impute by global mean
-```{r}
-surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
-  ungroup() %>%
-  mutate_if(is.numeric,~ ifelse(is.nan(.),mean(., na.rm = TRUE),.)) 
-```
-
-If a person does not have a value, then impute by global mean
-```{r}
-surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
-  mutate_if(is.numeric,~ ifelse(is.infinite(.),mean(., na.rm = TRUE),.)) 
-
-```
-
-Many inf values in rr data, so drop for now
-```{r}
-sapply(surveys_wide_join_train_data_clean,function(x) any(is.infinite(x)))
-
-```
-
-```{r}
-surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
-  dplyr::select(-hrv_rr_data)
-
-```
-
-Correlations between variables
-```{r}
-corrplot::corrplot(cor(surveys_wide_join_train_data_clean %>%
-      select_if(is.numeric)))
-```
-
-REmove correlated vars 
-
-```{r}
-hrv_vars_to_keep <- surveys_wide_join_train_data_clean %>%
-  dplyr::select(hrv_total_power,hrv_how_feel,hrv_how_mood, hrv_how_sleep, hrv_vlf, hrv_lfhf)
-
-surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
-  dplyr::select(!starts_with("hrv"))
-surveys_wide_join_train_data_clean <- cbind(surveys_wide_join_train_data_clean, hrv_vars_to_keep)
-
-```
-
-
-REmove observation ids
-```{r}
-surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
-  dplyr::select(-outcome_user_code, -outcome_created_at)
-```
 
 
 # Ordered logistic regression
@@ -121,13 +82,223 @@ surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
 Conducting an ordered logistic regression with the polyr function from the MASS package
 
 ```{r}
-m <- polr(outcome_S_COVID_OVERALL ~ ., data = surveys_wide_join_train_data_clean, Hess=TRUE)
-
+m_log_regression1 <- polr(outcome_S_COVID_OVERALL ~ ., data = surveys_wide_join_train_data_clean, Hess=TRUE)
 ```
+
 
 # Predict classes
 
 ```{r}
-table(predict(m,newdata = surveys_wide_join_train_data_clean), surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL)
+predictions_train_m_log_regression1 <- predict(m_log_regression1,newdata = surveys_wide_join_train_data_clean)
 ```
+
+MSE
+https://stats.stackexchange.com/questions/338904/measures-of-ordinal-classification-error-for-ordinal-regression
+
+Note that classes are imbalanced, so mean squared error might not work as well
+
+```{r}
+mse <- function(predictions,labels) {
+  mean((as.numeric(predictions) - as.numeric(labels))^2)
+}
+
+mse_predictions_train_m_log_regression1 <- mse(predictions_train_m_log_regression1, surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL)
+```
+
+
+# LOOCV 
+
+Calculate mse from LOOCV
+
+```{r}
+# Function to fit model and predict train labels, returns mse 
+get_loocv_polr_mse <- function(f, d, l) {
+  m <- polr(f, d, Hess=TRUE)
+  m_predictions <- predict(m,newdata = d)
+  
+  return(mse(predictions = m_predictions, labels = l))
+} 
+
+# For loop where we skip one observation at a time, returns list with mse
+mse_loocv <- as.list(1:nrow(surveys_wide_join_train_data_clean))
+for (i in 1:nrow(surveys_wide_join_train_data_clean)) {
+    mse_loocv[[i]] <- try(get_loocv_polr_mse(f = outcome_S_COVID_OVERALL ~ ., d = surveys_wide_join_train_data_clean[-i,], l = surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL[-i] ))
+   
+}
+
+# Take the mean mse overl all LOO trials
+mse_loocv <- mse_loocv[map_lgl(mse_loocv, ~ class(.x) != "try-error")]
+mse_loocv_est <- mean(unlist(mse_loocv))
+
+```
+
+
+Calculate J from LOOCV
+
+```{r}
+# Function to fit model and predict train labels, returns mse 
+get_loocv_polr_j <- function(f, d, l) {
+  m <- polr(f, d, Hess=TRUE)
+  m_predictions <- predict(m,newdata = d)
+  
+  return(perff_equal(ytest = as.factor(as.character(l)),ytestpred = m_predictions))
+} 
+
+# For loop where we skip one observation at a time, returns list with mse
+j_loocv <- as.list(1:nrow(surveys_wide_join_train_data_clean))
+for (i in 1:nrow(surveys_wide_join_train_data_clean)) {
+    j_loocv[[i]] <- try(get_loocv_polr_j(f = outcome_S_COVID_OVERALL ~ ., d = surveys_wide_join_train_data_clean[-i,], l = surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL[-i] ))
+   
+}
+
+# Take the mean mse overl all LOO trials
+j_loocv <- j_loocv[map_lgl(j_loocv, ~ class(.x) != "try-error")]
+j_loocv_est <- mean(unlist(j_loocv))
+j_loocv_est
+
+summary(unlist(j_loocv))
+```
+
+# AIC
+
+```{r}
+stepAIC(m_log_regression1)
+
+exp(coef(m_log_regression1))
+```
+
+
+# Subset selection
+
+```{r}
+m_log_regression1_step <- stepAIC(m_log_regression1,direction = "both",score = list(lower = ~1,upper=~.))
+```
+
+Compare full and subset model 
+```{r}
+summary(m_log_regression1_step)
+summary(m_log_regression1)
+
+anova(m_log_regression1, m_log_regression1_step)
+```
+
+Although the models are not significantly different according to the LRT, the step model has lower AIC.
+
+```{r}
+brant::brant(m_log_regression1_step)
+```
+
+
+
+
+# Try Ordinal Forest
+
+```{r}
+library(ordinalForest)
+
+data(hearth)
+
+surveys_wide_join_train_data_clean <- as.data.frame(surveys_wide_join_train_data_clean)
+
+
+
+m_ordfor_1 <- ordfor(depvar = "outcome_S_COVID_OVERALL", surveys_wide_join_train_data_clean %>%
+  mutate_if(is.ordered, as.factor))
+
+enframe(m_ordfor_1$varimp) %>%
+  mutate(name = fct_reorder(as.factor(name),.x = value)) %>%
+  ggplot(aes(value, name, fill = value)) +
+  geom_col() +
+  ylab("")
+```
+
+
+```{r}
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(wearables_pulse_min,wearables_total_calories_burned, color = outcome_S_COVID_OVERALL)) +
+  geom_point() 
+```
+
+
+```{r}
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(wearables_pulse_min,outcome_S_COVID_OVERALL)) +
+  geom_boxplot()
+
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(wearables_total_calories_burned,outcome_S_COVID_OVERALL)) +
+  geom_boxplot()
+
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(hrv_vlf,outcome_S_COVID_OVERALL)) +
+  geom_boxplot()
+
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(weather_humidity,outcome_S_COVID_OVERALL)) +
+  geom_boxplot()
+
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(participants_age_range,outcome_S_COVID_OVERALL)) +
+  geom_bin_2d()
+
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(participants_gender,outcome_S_COVID_OVERALL)) +
+  geom_bin_2d()
+```
+
+
+"Youden’s J statistic is calculated with respect to each
+class ("observation/prediction in class j" vs. "observation/prediction NOT in class j" (j=1,...,J)) and
+the simple average of the J results taken."
+
+```{r}
+
+predictions_m_ordfor_1 <- predict(m_ordfor_1,newdata = surveys_wide_join_train_data_clean)
+predictions_m_log_regression1_step <- predict(m_log_regression1_step,newdata = surveys_wide_join_train_data_clean)
+predictions_m_log_regression1 <- predict(m_log_regression1,newdata = surveys_wide_join_train_data_clean)
+
+perff_equal(ytest = as.factor(as.character(surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL)),ytestpred = predictions_m_ordfor_1$ypred)
+
+perff_equal(ytest = as.factor(as.character(surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL)),ytestpred = predictions_m_log_regression1_step)
+
+perff_equal(ytest = as.factor(as.character(surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL)),ytestpred = predictions_m_log_regression1)
+
+
+```
+
+
+
+
+```{r}
+data(hearth)
+# Inspect the data:
+table(hearth$Class)
+dim(hearth)
+head(hearth)
+# Split into training dataset and test dataset:
+set.seed(123)
+trainind <- sort(sample(1:nrow(hearth), size=floor(nrow(hearth)*(2/3))))
+testind <- setdiff(1:nrow(hearth), trainind)
+datatrain <- hearth[trainind,]
+datatest <- hearth[testind,]
+# Construct OF prediction rule using the training dataset (default
+# perffunction = "probability" corresponding to the
+# (negative) ranked probability score as performance function):
+ordforres <- ordfor(depvar="Class", data=datatrain, nsets=1000, ntreeperdiv=100,
+ntreefinal=5000, perffunction = "equal")
+ordforres
+# Study variable importance values:
+sort(ordforres$varimp, decreasing=TRUE)
+# Take a closer look at the top variables:
+boxplot(datatrain$oldpeak ~ datatrain$Class, horizontal=TRUE)
+fisher.test(table(datatrain$exang, datatrain$Class))
+# Predict values of the ordinal target variable in the test dataset:
+preds <- predict(ordforres, newdata=datatest)
+preds
+# Compare predicted values with true values:
+table(data.frame(true_values=datatest$Class, predictions=preds$ypred))
+```
+
+
+
 
