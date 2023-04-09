@@ -269,36 +269,6 @@ perff_equal(ytest = as.factor(as.character(surveys_wide_join_train_data_clean$ou
 
 
 
-```{r}
-data(hearth)
-# Inspect the data:
-table(hearth$Class)
-dim(hearth)
-head(hearth)
-# Split into training dataset and test dataset:
-set.seed(123)
-trainind <- sort(sample(1:nrow(hearth), size=floor(nrow(hearth)*(2/3))))
-testind <- setdiff(1:nrow(hearth), trainind)
-datatrain <- hearth[trainind,]
-datatest <- hearth[testind,]
-# Construct OF prediction rule using the training dataset (default
-# perffunction = "probability" corresponding to the
-# (negative) ranked probability score as performance function):
-ordforres <- ordfor(depvar="Class", data=datatrain, nsets=1000, ntreeperdiv=100,
-ntreefinal=5000, perffunction = "equal")
-ordforres
-# Study variable importance values:
-sort(ordforres$varimp, decreasing=TRUE)
-# Take a closer look at the top variables:
-boxplot(datatrain$oldpeak ~ datatrain$Class, horizontal=TRUE)
-fisher.test(table(datatrain$exang, datatrain$Class))
-# Predict values of the ordinal target variable in the test dataset:
-preds <- predict(ordforres, newdata=datatest)
-preds
-# Compare predicted values with true values:
-table(data.frame(true_values=datatest$Class, predictions=preds$ypred))
-```
-
 
 
 
