@@ -1,0 +1,202 @@
+---
+title: "project revised"
+author: "Andrew Wrench"
+output: html_document
+---
+```{r}
+library('psych')
+library('ggplot2')
+library('gridExtra')
+library('ggcorrplot')
+library('factoextra')
+library('cluster')
+library('NbClust')
+library('dendextend')
+library('tidyr')
+library('dplyr')
+library('stringr')
+```
+
+```{r}
+hrv_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/hrv_measurements.csv')
+sleep_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/sleep.csv')
+bp_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/blood_pressure.csv')
+heart_rate_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/heart_rate.csv')
+participants_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/participants.csv')
+scales_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/scales_description.csv')
+surveys_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/surveys.csv')
+wearables_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/wearables.csv')
+weather_data = read.csv('/Users/andrewwrench/Downloads/hrv-covid19-master/data/weather.csv')
+```
+
+# taking HRV_measurements data, and averaging all numeric columns for indidivual reportings specific to day and AM/PM
+```{r}
+hrv_data_sub = hrv_data
+hrv_data_sub$measurement_datetime = str_sub(hrv_data$measurement_datetime, end = -7)
+hrv_data_sub[c('date', 'time')] = str_split_fixed(hrv_data_sub$measurement_datetime, ' ', 2)
+hrv_data_sub = subset(hrv_data_sub, select = -c(measurement_datetime, time_of_day, rr_code, how_feel, how_mood, how_sleep, tags, rr_data))
+hrv_data_sub
+hrv_data_sub$time = as.integer(hrv_data_sub$time)
+hrv_data_sub$time = ifelse(hrv_data_sub$time >= 12, 'PM', 'AM')
+hrv_data_sub
+unique(hrv_data_sub$time)
+hrv_data_sub_means = hrv_data_sub %>% group_by(user_code, date, time) %>% summarise(across(everything(), mean), .groups = 'drop')  %>% as.data.frame()
+hrv_data_sub_means
+```
+
+# changing age ranges to single numbers, genders to t/f, and cutting out useless columns
+```{r}
+participants_data
+unique(participants_data$age_range)
+participants_data$age_range[participants_data$age_range == '18-24'] = 1
+participants_data$age_range[participants_data$age_range == '25-34'] = 2
+participants_data$age_range[participants_data$age_range == '35-44'] = 3
+participants_data$age_range[participants_data$age_range == '45-54'] = 4
+participants_data$age_range[participants_data$age_range == '55-64'] = 5
+participants_data$age_range[participants_data$age_range == '65-74'] = 6
+participants_data$gender[participants_data$gender == 'm'] = T
+participants_data$gender[participants_data$gender == 'f'] = F
+participants_data$gender = as.logical(participants_data$gender)
+participants_data_sub = subset(participants_data, select = -c(city, country, symptoms_onset))
+participants_data_sub
+```
+
+# joining participants and hrv datasets by user_code, date, and time so that every hrv avg value for an am/pm observation is filled with static gender, weight, etc
+```{r}
+hrv_participants_data = full_join(hrv_data_sub_means, participants_data_sub, by = 'user_code')
+hrv_participants_data
+dim(hrv_data_sub_means)
+dim(hrv_participants_data)
+dim(participants_data_sub)
+hrv_participants_data$user_code_date_time = paste0(hrv_data_sub_means$user_code, hrv_data_sub_means$date, hrv_data_sub_means$time)
+hrv_participants_data
+```
+
+# averaging bp values for each participant for am/pm per day, noticeable lose a lot of columns here
+```{r}
+bp_data_sub = bp_data
+bp_data_sub$measurement_datetime = str_sub(bp_data_sub$measurement_datetime, end = -7)
+bp_data_sub[c('date', 'time')] = str_split_fixed(bp_data_sub$measurement_datetime, ' ', 2)
+bp_data_sub = subset(bp_data_sub, select = -c(measurement_datetime))
+bp_data_sub$time = as.integer(bp_data_sub$time)
+bp_data_sub$time = ifelse(bp_data_sub$time >= 12, 'PM', 'AM')
+bp_data_sub
+unique(bp_data_sub$time)
+bp_data_sub_means = bp_data_sub %>% group_by(user_code, date, time) %>% summarise(across(everything(), mean), .groups = 'drop')  %>% as.data.frame()
+bp_data_sub_means$user_code_date_time = paste0(bp_data_sub_means$user_code, bp_data_sub_means$date, bp_data_sub_means$time)
+bp_data_sub_means
+```
+
+# joining bp table to hrv and participant tables
+```{r}
+bp_hrv_participants_data = full_join(hrv_participants_data, bp_data_sub_means, by = 'user_code_date_time')
+bp_hrv_participant_data
+dim(bp_hrv_participant_data)
+length(unique(bp_hrv_participant_data$user_code_date_time))
+bp_hrv_participants_data_sub = subset(bp_hrv_participants_data, select = -c(user_code.x, date.x, time.x, user_code.y, date.y, time.y))
+bp_hrv_participants_data_sub
+```
+
+#changing wearables data to better format
+```{r}
+wearables_data_sub = wearables_data
+wearables_data_sub_means = wearables_data_sub %>% group_by(user_code, day) %>% summarise(across(everything(), mean), .groups = 'drop')  %>% as.data.frame()
+wearables_data_sub_means$user_code_date_time = paste0(wearables_data_sub_means$user_code, wearables_data_sub_means$day, 'AM')
+wearables_data_sub_means
+```
+
+# joining wearables to bp, hrv, participants table
+```{r}
+wearables_bp_hrv_participants_data = full_join(bp_hrv_participants_data, wearables_data_sub_means, by = 'user_code_date_time')
+wearables_bp_hrv_participants_data
+dim(wearables_bp_hrv_participants_data)
+length(unique(wearables_bp_hrv_participants_data$user_code_date_time))
+wearables_bp_hrv_participants_data_sub = subset(wearables_bp_hrv_participants_data, select = -c(user_code.x, date.x, time.x, user_code.y, date.y, time.y))
+wearables_bp_hrv_participants_data_sub
+dim(bp_hrv_participant_data)
+```
+
+# similar conversion on heart rate data for new avg
+```{r}
+heart_rate_data_sub = heart_rate_data
+heart_rate_data_sub$datetime = str_sub(heart_rate_data_sub$datetime, end = -7)
+heart_rate_data_sub[c('date', 'time')] = str_split_fixed(heart_rate_data_sub$datetime, ' ', 2)
+heart_rate_data_sub = subset(heart_rate_data_sub, select = -c(is_resting, datetime))
+heart_rate_data_sub$time = as.integer(heart_rate_data_sub$time)
+heart_rate_data_sub$time = ifelse(heart_rate_data_sub$time >= 12, 'PM', 'AM')
+heart_rate_data_sub
+unique(heart_rate_data_sub$time)
+heart_rate_data_sub_means = heart_rate_data_sub %>% group_by(user_code, date, time) %>% summarise(across(everything(), mean), .groups = 'drop')  %>% as.data.frame()
+heart_rate_data_sub_means$user_code_date_time = paste0(heart_rate_data_sub_means$user_code, heart_rate_data_sub_means$date, heart_rate_data_sub_means$time)
+heart_rate_data_sub_means
+```
+
+# full join of heart rate data with wearables, bp, hrv, participant data
+```{r}
+heart_rate_wearables_bp_hrv_participants_data = full_join(wearables_bp_hrv_participants_data_sub, heart_rate_data_sub_means, by = 'user_code_date_time')
+heart_rate_wearables_bp_hrv_participants_data
+dim(heart_rate_wearables_bp_hrv_participants_data)
+length(unique(heart_rate_wearables_bp_hrv_participants_data$user_code_date_time))
+heart_rate_wearables_bp_hrv_participants_data_sub = subset(heart_rate_wearables_bp_hrv_participants_data, select = -c(user_code.x, user_code.y, day))
+heart_rate_wearables_bp_hrv_participants_data_sub
+dim(wearables_bp_hrv_participants_data)
+```
+
+# sleep data conversion
+```{r}
+sleep_data_sub = sleep_data
+sleep_data_sub$sleep_begin = str_sub(sleep_data_sub$sleep_begin, end = -7)
+sleep_data_sub
+sleep_data
+summary(sleep_data)
+sleep_data_sub[c('date', 'time')] = str_split_fixed(sleep_data_sub$sleep_begin, ' ', 2)
+sleep_data_sub = subset(sleep_data_sub, select = -c(day, sleep_end))
+sleep_data_sub$time = as.integer(sleep_data_sub$time)
+sleep_data_sub$time = ifelse(sleep_data_sub$time >= 12, 'PM', 'AM')
+sleep_data_sub
+unique(heart_rate_data_sub$time)
+sleep_data_sub_means = sleep_data_sub %>% group_by(user_code, date, time) %>% summarise(across(everything(), mean), .groups = 'drop')  %>% as.data.frame()
+sleep_data_sub_means$user_code_date_time = paste0(sleep_data_sub_means$user_code, sleep_data_sub_means$date, sleep_data_sub_means$time)
+sleep_data_sub_means
+```
+
+# adding sleep data to heart rate, wearables, bp, hrv, and participants data
+```{r}
+sleep_heart_rate_wearables_bp_hrv_participants_data = full_join(heart_rate_wearables_bp_hrv_participants_data_sub, sleep_data_sub_means, by = 'user_code_date_time')
+sleep_heart_rate_wearables_bp_hrv_participants_data
+dim(sleep_heart_rate_wearables_bp_hrv_participants_data)
+sleep_heart_rate_wearables_bp_hrv_participants_data_sub = subset(sleep_heart_rate_wearables_bp_hrv_participants_data, select = -c(time.x, date.x, date.y, time.y, pulse_min.y, pulse_max.y, pulse_average.y, pulse_min.x, pulse_max.x, pulse_average.x))
+sleep_heart_rate_wearables_bp_hrv_participants_data_sub
+```
+
+# organizing surveys data
+```{r}
+surveys_data_sub = surveys_data
+surveys_data_sub = subset(surveys_data_sub, select = -c(text))
+surveys_data_sub
+surveys_data_sub_median = surveys_data_sub %>% group_by(user_code, scale, created_at) %>% summarise(across(everything(), median), .groups = 'drop')  %>% as.data.frame()
+surveys_data_sub_median$user_code_date_time = paste0(surveys_data_sub_median$user_code, surveys_data_sub_median$created_at, 'AM')
+surveys_data_sub_median
+```
+
+# joining surveys with other data tables
+```{r}
+surveys_sleep_heart_rate_wearables_bp_hrv_participants_data = full_join(sleep_heart_rate_wearables_bp_hrv_participants_data_sub, surveys_data_sub_median, by = 'user_code_date_time')
+surveys_sleep_heart_rate_wearables_bp_hrv_participants_data
+dim(surveys_sleep_heart_rate_wearables_bp_hrv_participants_data)
+surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub = subset(surveys_sleep_heart_rate_wearables_bp_hrv_participants_data, select = -c(user_code.y, user_code.x))
+surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub
+```
+
+```{r}
+surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric = select_if(surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub, is.numeric)
+summary(surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric)
+dim(surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric)
+```
+
+```{r}
+surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric_scaled = scale(surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric)
+summary(surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric)
+surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric_scaled
+surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric_scaled_pca = prcomp(surveys_sleep_heart_rate_wearables_bp_hrv_participants_data_sub_numeric_scaled)
+```
