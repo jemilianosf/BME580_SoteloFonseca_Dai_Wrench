@@ -1,0 +1,38 @@
+---
+title: "tables"
+author: "Andrew Wrench"
+output: html_document
+---
+```{r}
+library('NbClust')
+```
+
+```{r}
+data_table = read.table(file = '/Users/andrewwrench/Downloads/surveys_wide_join_train_data.tsv', sep = '\t', header = TRUE) 
+```
+
+```{r}
+data_table_numeric = select_if(data_table, is.numeric)
+data_table_numeric = subset(data_table_numeric, select = -c(hrv_rr_data))
+data_table_numeric_impute = impute_mean(data_table_numeric, type = "columnwise", convert_tibble = TRUE)
+data_table_numeric_impute
+data_table_numeric
+data_table_numeric_impute_scaled = scale(data_table_numeric_impute)
+data_table_numeric_impute_scaled
+data_table_numeric_impute_scaled_pca = prcomp(data_table_numeric_impute_scaled)
+summary(data_table_numeric_impute_scaled_pca)
+print(data_table_numeric_impute_scaled_pca$rotation)
+```
+
+```{r}
+data_table_numeric_impute_scaled_pca_variation = data_table_numeric_impute_scaled_pca$sdev^2 / sum(data_table_numeric_impute_scaled_pca$sdev^2)
+data_table_numeric_impute_scaled_pca_variation_scree = qplot(c(1:49), data_table_numeric_impute_scaled_pca_variation) + geom_col() + labs(y = 'Percent of Variance Explained by PC', title = 'Scree Plot of Variation Explained by Principal Component (PC)') + theme(plot.title = element_text(hjust = 0.5)) + scale_y_continuous(labels = scales::percent_format(accuracy = 1)) + geom_line() + scale_x_discrete(name = 'PC')
+print(data_table_numeric_impute_scaled_pca_variation_scree)
+```
+
+```{r}
+data_table_numeric_impute_scaled_kmeans = kmeans(data_table_numeric_impute_scaled, centers = 6)
+table(data_table_numeric_impute_scaled_kmeans$cluster, data_table$outcome_S_COVID_OVERALL)
+data_table_numeric_impute_scaled_kmeans_plot = fviz_cluster(data_table_numeric_impute_scaled_kmeans, data = data_table_numeric_impute) + labs(x = 'PC1', y = 'PC2', title = 'Cluster Plot for Reported Numeric Variables') + theme(plot.title = element_text(hjust = 0.5))
+print(data_table_numeric_impute_scaled_kmeans_plot)
+```
