@@ -329,9 +329,10 @@ na_proportion_per_feature %>%
   enframe() %>%
   ggplot(aes(value)) +
   geom_histogram() +
-  theme_light() +
+  theme_classic() +
   theme(aspect.ratio = 1) +
-  ggtitle("Proportion of NA values per feature")
+  ggtitle("Proportion of NA values per feature") +
+  xlab(NULL)
 ```
 
 Remove features with > 60% NA values
@@ -394,7 +395,46 @@ surveys_wide_join_clean <- cbind(surveys_wide_join_clean, hrv_vars_to_keep)
 
 ```
 
-## Split train / test
+```{r}
+ p_counts_per_class_binary <- surveys_wide_join_clean %>%
+  ggplot(aes(outcome_symptom_severity)) +
+  geom_histogram(stat = "count", fill = "darkblue") +
+  theme_classic() +
+  theme(aspect.ratio = 1) +
+  ggtitle("Counts per class (binary)") +
+  xlab(NULL)
+
+table(surveys_wide_join_clean$outcome_symptom_severity)
+```
+
+```{r}
+surveys_wide_join_clean %>%
+  select(starts_with("outcome") | starts_with("hrv") & !starts_with("hrv_how")) %>%
+  View()
+```
+
+
+# Plots
+
+```{r}
+
+p_counts_per_class_binary
+
+```
+
+
+```{r}
+
+
+
+corrplot::corrplot(cor(surveys_wide_join_clean %>%
+      select_if(is.numeric)))
+
+
+```
+
+
+## Splittrain / test
 
 ```{r}
 set.seed(42)
@@ -409,6 +449,11 @@ write_tsv(surveys_wide_join_test_data_clean,"../data_clean/surveys_wide_join_tes
 
 ```
 
+```{r}
+surveys_wide_join_test_data_clean <- read_tsv("../data_clean/surveys_wide_join_test_data_clean.tsv")
+
+table(sapply(surveys_wide_join_test_data_clean[,-c(1:4)], class))
+```
 
 # Alternative data table, for unsupervised approach purposes
 

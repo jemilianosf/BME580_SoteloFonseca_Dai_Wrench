@@ -8,7 +8,6 @@ date: '2023-04-02'
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# Aims
 
 # Resources
 
@@ -21,6 +20,8 @@ https://stats.stackexchange.com/questions/493254/why-ordinal-target-in-classific
 library(tidyverse)
 library(MASS)
 library(ROCR)
+library(ordinalForest)
+library(psych)
 ```
 
 # Read data
@@ -28,6 +29,9 @@ library(ROCR)
 surveys_wide_join_train_data_clean <- read_tsv("../data_clean/surveys_wide_join_train_data_clean.tsv")
 ```
 
+```{r}
+surveys_wide_join_test_data_clean <- read_tsv("../data_clean/surveys_wide_join_test_data_clean.tsv")
+```
 
 Remove observation ids
 ```{r}
@@ -62,6 +66,15 @@ surveys_wide_join_train_data_clean <- surveys_wide_join_train_data_clean %>%
   mutate_if(is.numeric, scale)
 ```
 
+```{r}
+surveys_wide_join_train_data_clean$participants_gender <- as.factor(surveys_wide_join_train_data_clean$participants_gender)
+
+#synthetic_data <- SMOTE(X = surveys_wide_join_train_data_clean %>%
+        #select_if(is.numeric), target = #surveys_wide_join_train_data_clean$outcome_S_COVID_OVERALL,dup_size = 1)
+#synthetic_data$syn_data$class
+```
+
+
 # Basic data exploration
 
 Distributions of numeric variables
@@ -74,6 +87,23 @@ surveys_wide_join_train_data_clean %>%
   geom_histogram() +
   facet_wrap(~feature,scales = "free")
 ```
+
+```{r}
+surveys_wide_join_train_data_clean %>%
+  select_if(is.numeric) %>%
+  psych::pairs.panels()
+```
+
+Class imbalance
+```{r}
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(outcome_S_COVID_OVERALL)) +
+  geom_histogram(stat = "count", fill = "darkblue") +
+  theme_classic() +
+  theme(aspect.ratio = 1) +
+  ggtitle("Counts per class (ordinal)")
+```
+
 
 
 
@@ -184,9 +214,22 @@ anova(m_log_regression1, m_log_regression1_step)
 
 Although the models are not significantly different according to the LRT, the step model has lower AIC.
 
+Variables:
 ```{r}
-brant::brant(m_log_regression1_step)
+sort(abs(m_log_regression1_step$coefficients[-c(10:13)]),decreasing = TRUE) %>%
+  enframe() %>%
+  mutate(name = fct_reorder(as.factor(name),.x = value)) %>%
+  ggplot(aes(value, name, fill = value)) +
+  geom_col() +
+  ylab("") +
+  theme_classic() +
+  theme(aspect.ratio = 1, legend.position = "none") +
+  xlab("abs(coefficient)") +
+  ggtitle("Ordered logistic regression coefficients \n
+          after step selection")
+
 ```
+
 
 
 
@@ -194,35 +237,48 @@ brant::brant(m_log_regression1_step)
 # Try Ordinal Forest
 
 ```{r}
-library(ordinalForest)
 
-data(hearth)
 
 surveys_wide_join_train_data_clean <- as.data.frame(surveys_wide_join_train_data_clean)
 
 
 
 m_ordfor_1 <- ordfor(depvar = "outcome_S_COVID_OVERALL", surveys_wide_join_train_data_clean %>%
-  mutate_if(is.ordered, as.factor))
+  mutate_if(is.ordered, as.factor),perffunction = "probability")
 
 enframe(m_ordfor_1$varimp) %>%
   mutate(name = fct_reorder(as.factor(name),.x = value)) %>%
   ggplot(aes(value, name, fill = value)) +
   geom_col() +
-  ylab("")
+  ylab("") +
+  theme_classic() +
+  theme(aspect.ratio = 1, legend.position = "none") +
+  xlab("Ranked Probability Score") +
+  ggtitle("Ordinal Forest Variable Importance")
+
+```
+
+
+Explore important variables:
+
+```{r}
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(wearables_resting_pulse,participants_weight, color = outcome_S_COVID_OVERALL)) +
+  geom_point() +
+  theme_linedraw() +
+  theme(aspect.ratio = 1)
+
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(wearables_pulse_min,hrv_vlf, color = outcome_S_COVID_OVERALL)) +
+  geom_point() +
+  theme_linedraw() +
+  theme(aspect.ratio = 1, legend.position = "bottom") 
 ```
 
 
 ```{r}
 surveys_wide_join_train_data_clean %>%
-  ggplot(aes(wearables_pulse_min,wearables_total_calories_burned, color = outcome_S_COVID_OVERALL)) +
-  geom_point() 
-```
-
-
-```{r}
-surveys_wide_join_train_data_clean %>%
-  ggplot(aes(wearables_pulse_min,outcome_S_COVID_OVERALL)) +
+  ggplot(aes(wearables_resting_pulse,outcome_S_COVID_OVERALL)) +
   geom_boxplot()
 
 surveys_wide_join_train_data_clean %>%
@@ -244,6 +300,21 @@ surveys_wide_join_train_data_clean %>%
 surveys_wide_join_train_data_clean %>%
   ggplot(aes(participants_gender,outcome_S_COVID_OVERALL)) +
   geom_bin_2d()
+```
+```{r}
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(wearables_resting_pulse,outcome_S_COVID_OVERALL)) +
+  geom_boxplot(aes(color = outcome_S_COVID_OVERALL)) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+surveys_wide_join_train_data_clean %>%
+  ggplot(aes(hrv_vlf,outcome_S_COVID_OVERALL)) +
+  geom_boxplot(aes(color = outcome_S_COVID_OVERALL)) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+
 ```
 
 
@@ -267,6 +338,185 @@ perff_equal(ytest = as.factor(as.character(surveys_wide_join_train_data_clean$ou
 ```
 
 
+# Add test data
+
+Process test data
+
+```{r}
+surveys_wide_join_test_data_clean <- read_tsv("../data_clean/surveys_wide_join_test_data_clean.tsv")
+```
+
+Remove observation ids
+```{r}
+surveys_wide_join_test_data_clean <- surveys_wide_join_test_data_clean %>%
+  dplyr::select(-outcome_user_code, -outcome_created_at)
+```
+
+Re-code  outcome as ordered 
+```{r}
+surveys_wide_join_test_data_clean <- surveys_wide_join_test_data_clean %>%
+  mutate(outcome_S_COVID_OVERALL = as.ordered(outcome_S_COVID_OVERALL))
+```
+
+Drop binary outcome version
+```{r}
+surveys_wide_join_test_data_clean <- surveys_wide_join_test_data_clean %>%
+  dplyr::select(-outcome_symptom_severity)
+
+colnames(surveys_wide_join_test_data_clean)
+```
+
+Recode how feel answers as ordinal
+```{r}
+surveys_wide_join_test_data_clean <- surveys_wide_join_test_data_clean %>%
+  mutate_at(vars(contains("how")), round) %>%
+  mutate_at(vars(contains("how")), as.ordered)
+```
+
+Scale numeric variables
+```{r}
+surveys_wide_join_test_data_clean <- surveys_wide_join_test_data_clean %>%
+  mutate_if(is.numeric, scale)
+```
+
+# Test models
+
+
+```{r}
+predictions_m_ordfor_1 <- predict(m_ordfor_1,newdata = surveys_wide_join_test_data_clean)
+predictions_m_log_regression1_step <- predict(m_log_regression1_step,newdata = surveys_wide_join_test_data_clean)
+predictions_m_log_regression1 <- predict(m_log_regression1,newdata = surveys_wide_join_test_data_clean)
+
+
+
+
+```
+
+
+## Explore J 
+
+```{r}
+
+perff_test <- data.frame(model = c("ordinalForest","logistic_step","logistic_full"),
+  j = c(perff_equal(ytest = as.factor(as.character(surveys_wide_join_test_data_clean$outcome_S_COVID_OVERALL)),ytestpred = predictions_m_ordfor_1$ypred),
+          perff_equal(ytest = as.factor(as.character(surveys_wide_join_test_data_clean$outcome_S_COVID_OVERALL)),ytestpred = predictions_m_log_regression1_step),
+          perff_equal(ytest = as.factor(as.character(surveys_wide_join_test_data_clean$outcome_S_COVID_OVERALL)),ytestpred = predictions_m_log_regression1)))
+
+perff_test %>%
+  mutate(model = fct_reorder(as.factor(model),j)) %>%
+  ggplot(aes(j, model)) +
+  geom_col(aes(fill = j)) +
+  theme_classic() +
+  theme(aspect.ratio = 1, legend.position = "none") +
+  ylab(NULL) +
+  xlab("J") +
+  ggtitle("Test J comparison")
+
+```
+
+# Calculate test RMSE
+
+```{r}
+
+
+mse_test <- data.frame(model = c("ordinalForest","logistic_step","logistic_full"),
+  mse = c(mse(predictions = predictions_m_ordfor_1$ypred, labels = surveys_wide_join_test_data_clean$outcome_S_COVID_OVERALL),
+                   mse(predictions = predictions_m_log_regression1_step, labels = surveys_wide_join_test_data_clean$outcome_S_COVID_OVERALL),
+                   mse(predictions = predictions_m_log_regression1, labels = surveys_wide_join_test_data_clean$outcome_S_COVID_OVERALL)))
+
+mse_test %>%
+  mutate(mse = sqrt(mse)) %>%
+  ggplot(aes(mse, model)) +
+  geom_col(aes(fill = mse)) +
+  theme_classic() +
+  theme(aspect.ratio = 1, legend.position = "none") +
+  ylab(NULL) +
+  xlab("RMSE") +
+  ggtitle("Test RMSE comparison") +
+  geom_text(nudge_x = 0.2, aes(label = round(mse,2)))
+
+```
+
+
+
+
+Convert predictions to binary
+
+```{r}
+
+n_cutoffs <- length(levels(predictions_m_ordfor_1$ypred))
+
+predictions_m_ordfor_1_binary_list <- map(levels(predictions_m_ordfor_1$ypred),
+    ~ as.numeric(as.character(predictions_m_ordfor_1$ypred) == .x))
+
+predictions_m_log_regression1_step_list <- map(levels(predictions_m_log_regression1_step),
+    ~ as.numeric(as.character(predictions_m_log_regression1_step) == .x))
+
+predictions_m_log_regression1_list <- map(levels(predictions_m_log_regression1),
+    ~ as.numeric(as.character(predictions_m_log_regression1) == .x))
+
+outcome_S_COVID_OVERALL_list <- map(levels(surveys_wide_join_test_data_clean$outcome_S_COVID_OVERALL),
+    ~ as.numeric(as.character(surveys_wide_join_test_data_clean$outcome_S_COVID_OVERALL) == .x))
+
+
+
+```
+
+
+Calculate ROC AUC
+
+```{r}
+predictions_m_ordfor_1_binary_list_auc <- map2_dbl(predictions_m_ordfor_1_binary_list,outcome_S_COVID_OVERALL_list,
+     function(.x,.y){
+       performance(prediction(predictions = as.numeric(.x),labels = as.numeric(.y)),
+           measure = "auc")@y.values[[1]]
+     })
+
+predictions_m_log_regression1_step_list_auc <- map2_dbl(predictions_m_log_regression1_step_list,outcome_S_COVID_OVERALL_list,
+     function(.x,.y){
+       performance(prediction(predictions = as.numeric(.x),labels = as.numeric(.y)),
+           measure = "auc")@y.values[[1]]
+     })
+
+predictions_m_log_regression1_list_auc <- map2_dbl(predictions_m_log_regression1_list,outcome_S_COVID_OVERALL_list,
+     function(.x,.y){
+       performance(prediction(predictions = as.numeric(.x),labels = as.numeric(.y)),
+           measure = "auc")@y.values[[1]]
+     })
+
+outcome_S_COVID_OVERALL_list_auc <- map2_dbl(outcome_S_COVID_OVERALL_list,outcome_S_COVID_OVERALL_list,
+     function(.x,.y){
+       performance(prediction(predictions = as.numeric(.x),labels = as.numeric(.y)),
+           measure = "auc")@y.values[[1]]
+     })
+
+```
+
+# Calculate per class AUC
+
+```{r}
+per_class_auc <- data.frame("auc" = c(predictions_m_ordfor_1_binary_list_auc,
+                     predictions_m_log_regression1_step_list_auc,
+                     predictions_m_log_regression1_list_auc),
+           "class"= as.factor(rep(1:5, 3)),
+           "model" = rep(c("ordinalForest","logistic_step","logistic_full"),each = 5)) 
+mean_auc <- per_class_auc %>%
+  group_by(model) %>%
+  summarise(auc = mean(auc))
+
+per_class_auc %>%
+  ggplot(aes(auc,model, color = class)) +
+  geom_point(size = 3) +
+  geom_point(data = mean_auc, size = 5, color = "red", shape = 4) +
+  theme_light() +
+  scale_color_viridis_d() +
+  ylab(NULL) +
+  xlab("AUC") +
+  theme(aspect.ratio = 1) +
+  ggtitle("Per class AUC")
+
+
+```
 
 
 
