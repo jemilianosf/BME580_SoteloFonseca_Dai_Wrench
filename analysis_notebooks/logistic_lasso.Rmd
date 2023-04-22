@@ -1,0 +1,500 @@
+---
+title: "classfication_models_v2"
+author: "Doreen"
+date: "2023-04-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(utils)
+library(MASS)
+library(ROCR)
+library(caret)
+library(gmodels)
+library(class) # Knn algorithm
+library(patchwork)
+library(psych)
+library(dplyr)
+library(reshape2)
+
+library(caret) # Hyperparameter tuning and modeling pipelines
+library(tidyverse) # Data handling functions
+library(MLmetrics) # Easy model performance metrics
+library(glmnet) # Lasso, ridge, and elastic net regression
+library(splines) # Splines
+library(psych)
+library(tree) # Decision tree
+library(randomForest) # Random forest 
+library(e1071) # SVMs
+
+set.seed(580)
+```
+
+```{r}
+# load clean data sets after preprocessing
+path_train <- '/Users/doreenmacpro/Downloads/BME580_project/data_clean/surveys_wide_join_train_data_clean.tsv'
+df_train <- read_delim(path_train,show_col_types = FALSE) 
+path_test <- '/Users/doreenmacpro/Downloads/BME580_project/data_clean/surveys_wide_join_test_data_clean.tsv'
+df_test <- read_delim(path_test,show_col_types = FALSE) 
+
+# add binary outcome 
+df_train$outcome_symptom_severity <- as.factor(df_train$outcome_symptom_severity)
+df_test$outcome_symptom_severity <- as.factor(df_test$outcome_symptom_severity)
+
+names(df_train)[names(df_train) == "outcome_symptom_severity"] <- "binary_outcome"
+names(df_test)[names(df_test) == "outcome_symptom_severity"] <- "binary_outcome"
+
+# get rid of user_code, date, and numeric outcome 
+df_train <- df_train %>% dplyr::select(-outcome_S_COVID_OVERALL)
+df_train <- df_train %>% dplyr::select(-outcome_user_code)
+df_train <- df_train %>% dplyr::select(-outcome_created_at)
+
+df_test <- df_test %>% dplyr::select(-outcome_S_COVID_OVERALL)
+df_test <- df_test %>% dplyr::select(-outcome_user_code)
+df_test <- df_test %>% dplyr::select(-outcome_created_at)
+
+# df_train <- df_train %>% dplyr::select(-participants_gender)
+# df_test <- df_test %>% dplyr::select(-participants_gender)
+
+# among the rest feature variables, only participants_age_range is range, e.g. 45-54
+# let's do an average of the min and max of the range for each patient 
+
+df_train$participants_age_range <- unlist(lapply(strsplit(df_train$participants_age_range, "-"), function(x) mean(as.numeric(x))))
+
+df_test$participants_age_range <- unlist(lapply(strsplit(df_test$participants_age_range, "-"), function(x) mean(as.numeric(x))))
+
+# convert char features to factor 
+df_train <- df_train %>% mutate_if(is.character, as.factor)
+df_test <- df_test %>% mutate_if(is.character, as.factor)
+
+# dimensionality of train and test sets
+print(df_train)
+print(df_test)
+
+print(paste("number of columns of train set is", ncol(df_train)))
+print(paste("number of columns at test set is", ncol(df_test)))
+
+library(smotefamily)
+library(caret)
+
+# Set the random seed for reproducibility
+set.seed(123)
+
+# Check the class distribution in the training data
+#table(df_train$binary_outcome)
+
+#df_train
+t1 = df_train %>% dplyr::select(-c(participants_gender, binary_outcome))
+#t1
+# Apply SMOTE to oversample the minority class
+trainDataSMOTE <- SMOTE(t1, df_train$binary_outcome,
+                         K = 5,
+                         dup_size = 0)
+
+# Check the class distribution in the oversampled training data
+#class(trainDataSMOTE)
+#summary(as.data.frame(trainDataSMOTE)$Species)
+df_train_oversampled <- as.data.frame(trainDataSMOTE$data)
+df_train_oversampled$class <- as.factor(df_train_oversampled$class)
+names(df_train_oversampled)[names(df_train_oversampled) == "class"] <- "binary_outcome"
+#table(trainDataSMOTE$data$class)
+print(df_train_oversampled)
+summary(df_train_oversampled$binary_outcome)
+
+df_train <- df_train_oversampled
+df_test_edited  <- df_test %>% dplyr::select(-c(participants_gender, binary_outcome))
+df_test_edited$binary_outcome <- df_test$binary_outcome
+df_test <- df_test_edited
+
+
+```
+```{r}
+
+
+# combine train and test before scaling 
+df <- rbind(df_train,df_test)
+
+
+# scale the data 
+scaleData = df %>% dplyr::select(-c(binary_outcome,hrv_how_feel,hrv_how_mood,hrv_how_sleep)) %>% 
+  mutate_if(is.numeric, scale) %>% 
+  bind_cols("binary_outcome" = df$binary_outcome) %>%
+  bind_cols("hrv_how_feel" = df$hrv_how_feel) %>%
+  bind_cols("hrv_how_mood" = df$hrv_how_mood) %>%
+  bind_cols("hrv_how_sleep" = df$hrv_how_sleep) 
+
+
+# get the scaled train and test data sets 
+df_train_scaled <- head(scaleData,nrow(df_train))
+df_test_scaled <- tail(scaleData,31)
+
+```
+```{r}
+df_train_scaled_log <- df_train_scaled
+df_test_scaled_log <- df_test_scaled
+# create a numeric binary outcome column 
+df_train_scaled_log$binary_outcome <- ifelse(df_train_scaled_log$binary_outcome == "not_severe",0,1)
+df_test_scaled_log$binary_outcome <- ifelse(df_test_scaled_log$binary_outcome == "not_severe",0,1)
+print(df_train_scaled)
+
+# Logistic Model 
+logModel = glm(binary_outcome ~., family = binomial, data = df_train_scaled_log)
+summary(logModel)
+
+# our predictions here will output a probability value when type = 'response'
+log.fit = predict(logModel, newdata = df_test_scaled_log, type='response')
+print(length(log.fit))
+# we then decide a threshold with which we set the predictions equal to yes and no
+log.fit = ifelse(log.fit > 0.5, 1, 0)
+misclassification = sum(log.fit != df_test_scaled_log$binary_outcome)/length(df_test_scaled_log$binary_outcome)
+accuracy = 1-misclassification
+print(paste("misclassification rate is",misclassification))
+print(paste("accuracy is", accuracy))
+```
+```{r}
+# step 1: create a prediction object 
+logfit <- predict(logModel, newdata = df_test_scaled_log, 
+                                               type='response')
+predictions_logMod_test <- prediction(logfit,
+                                        df_test_scaled_log$binary_outcome)
+
+# step 2: calculate the ROC curve and AUC
+roc_logMod <- performance(predictions_logMod_test,measure="tpr",
+                                 x.measure="fpr")
+auc_logMod <- performance(predictions_logMod_test,measure="auc")
+
+# plot the ROC curve
+plot(roc_logMod,main="Log Model ROC curve ",col="black",
+     lwd = 2)
+abline(0,1,lty=2,col="gray")
+legend("bottomright", paste0("AUC = ", round(auc_logMod@y.values[[1]], 3)))
+
+# print the overall are under the curve (namely, AUC)
+print(sprintf("Log Model AUC is: %f",auc_logMod@y.values[[1]]))
+
+
+```
+```{r}
+folds = 5
+x.train = model.matrix(binary_outcome~., df_train_scaled_log)
+y.train = df_train_scaled_log$binary_outcome
+# Run this code and repeat for the test set.
+x.test = model.matrix(binary_outcome~., df_test_scaled_log)
+y.test = df_test_scaled_log$binary_outcome
+lasso_model <- cv.glmnet(x = x.train, y = df_train_scaled_log$binary_outcome,
+                         alpha = 1,
+                         nfolds = folds)
+plot(lasso_model)
+
+lasso_coefs <- coef(lasso_model, s = "lambda.1se")
+print("Lasso coefficents using lambda.1se:")
+print(lasso_coefs)
+
+lasso_coefs <- coef(lasso_model, s = "lambda.1se")
+print("Lasso coefficents using lambda.1se:")
+print(lasso_coefs)
+```
+
+```{r}
+library(cowplot)
+# kCV Logistic Model 
+num_folds <- 5
+folds <- createFolds(df_train_scaled_log$binary_outcome, k = num_folds)
+sapply(folds,length)
+
+matrix_logMod_kCV <- matrix(nrow = num_folds, ncol = 9)
+
+best_log_model <- NULL
+best_log_val_acc <- 0
+best_auc <- 0
+
+for (i in 1:num_folds) {
+  
+  matrix_logMod_kCV[i,1] <- i
+  # get the training and validation sets for this fold
+  train_fold <- df_train_scaled_log[-folds[[i]], ]
+  valid_fold <- df_train_scaled_log[folds[[i]], ]
+  # Logistic Model 
+  log_Model = glm(binary_outcome ~., family = binomial, data = train_fold)
+
+  # our predictions here will output a probability value when type = 'response'
+  log.fit = predict(log_Model, newdata = valid_fold, type='response')
+  #print(length(log.fit))
+  # we then decide a threshold with which we set the predictions equal to yes and no
+  log.fit_edited = ifelse(log.fit > 0.5, 1, 0)
+  misclassification = sum(log.fit_edited != valid_fold$binary_outcome)/length(valid_fold$binary_outcome)
+  accuracy = 1-misclassification
+  print(paste("misclassification rate is",misclassification))
+  print(paste("accuracy is", accuracy))
+  
+  matrix_logMod_kCV[i,2] <- misclassification
+  matrix_logMod_kCV[i,3] <- accuracy
+  
+  # on train set our predictions here will output a probability value when type = 'response'
+  log.fit2 = predict(log_Model, newdata = train_fold, type='response')
+  #print(length(log.fit))
+  # we then decide a threshold with which we set the predictions equal to yes and no
+  log.fit2 = ifelse(log.fit2 > 0.5, 1, 0)
+  misclassification2 = sum(log.fit2 != train_fold$binary_outcome)/length(train_fold$binary_outcome)
+  accuracy2 = 1-misclassification2
+  print(paste("train misclassification rate is",misclassification2))
+  print(paste("train accuracy is", accuracy2))
+  
+  matrix_logMod_kCV[i,4] <- misclassification2
+  matrix_logMod_kCV[i,5] <- accuracy2
+  
+  # test set accuracy and misclassification rate
+  log.fit3 = predict(log_Model, newdata = df_test_scaled_log, type='response')
+  # we then decide a threshold with which we set the predictions equal to yes and no
+  log.fit3_edited = ifelse(log.fit3 > 0.5, 1, 0)
+  misclassification3 = (sum(log.fit3_edited != df_test_scaled_log$binary_outcome))/length(df_test_scaled_log$binary_outcome)
+  accuracy3 = 1-misclassification3
+  print(paste("test misclassification rate is",misclassification3))
+  print(paste("test accuracy is", accuracy3)) 
+  
+  matrix_logMod_kCV[i,6] <- misclassification3
+  matrix_logMod_kCV[i,7] <- accuracy3
+  
+  # validation AUC 
+  predictions_val <- prediction(log.fit,
+                                        valid_fold$binary_outcome)
+  auc_val <- performance(predictions_val,measure="auc")
+  
+  matrix_logMod_kCV[i,8] <- auc_val@y.values[[1]]
+  
+  # test AUC 
+  predictions_test <- prediction(log.fit3,
+                                        df_test_scaled_log$binary_outcome)
+  auc_test <- performance(predictions_test,measure="auc")
+  
+  matrix_logMod_kCV[i,9] <- auc_test@y.values[[1]]
+  
+  # test set ROC curve 
+  roc_test <- performance(predictions_test,measure="tpr",
+                                 x.measure="fpr")
+  plot(roc_test,main="Log Model ROC curve ",col="black",
+     lwd = 2)
+  abline(0,1,lty=2,col="gray")
+  legend("bottomright", paste0("AUC = ", round(auc_test@y.values[[1]], 3)))
+  
+  # if (accuracy > best_log_val_acc){
+  #   best_log_model <- logModel # pick the best model among all folds
+  #   best_log_val_acc <- accuracy
+  # }
+  
+  if (auc_val@y.values[[1]] > best_auc){
+    best_log_model <- log_Model
+    best_auc <- auc_val@y.values[[1]]
+    best_test_accuracy <- accuracy3
+  }
+  
+}
+
+print(paste("best test accuracy:", best_test_accuracy))
+
+```
+```{r}
+df_log_kCV <- as.data.frame(matrix_logMod_kCV)
+names(df_log_kCV)[names(df_log_kCV) == "V1"] <- "Fold #"
+names(df_log_kCV)[names(df_log_kCV) == "V2"] <- "val_misclass"
+names(df_log_kCV)[names(df_log_kCV) == "V3"] <- "val_accuracy"
+names(df_log_kCV)[names(df_log_kCV) == "V4"] <- "train_misclass"
+names(df_log_kCV)[names(df_log_kCV) == "V5"] <- "train_accuracy"
+names(df_log_kCV)[names(df_log_kCV) == "V6"] <- "test_misclass"
+names(df_log_kCV)[names(df_log_kCV) == "V7"] <- "test_accuracy"
+names(df_log_kCV)[names(df_log_kCV) == "V8"] <- "val_AUC"
+names(df_log_kCV)[names(df_log_kCV) == "V9"] <- "test_AUC"
+print(df_log_kCV)
+print(paste("mean accuracy for validation set cross all folds is:", mean(df_log_kCV$val_accuracy)))
+write.csv(df_log_kCV, "log_kCV.csv", row.names = FALSE)
+```
+```{r}
+ # test set accuracy and misclassification rate
+  log.fit3 = predict(best_log_model, newdata = df_test_scaled_log, type='response')
+  # we then decide a threshold with which we set the predictions equal to yes and no
+  log.fit3_edited = ifelse(log.fit3 > 0.5, 1, 0)
+  misclassification3 = (sum(log.fit3_edited != df_test_scaled_log$binary_outcome))/length(df_test_scaled_log$binary_outcome)
+  accuracy3 = 1-misclassification3
+  print(paste("test misclassification rate is",misclassification3))
+  print(paste("test accuracy is", accuracy3)) 
+
+  
+  # test AUC 
+  predictions_test <- prediction(log.fit3,
+                                        df_test_scaled_log$binary_outcome)
+  auc_test <- performance(predictions_test,measure="auc")
+  
+  
+  # test set ROC curve 
+  roc_test <- performance(predictions_test,measure="tpr",
+                                 x.measure="fpr")
+  plot(roc_test,main="Log Model ROC curve ",col="black",
+     lwd = 2)
+  abline(0,1,lty=2,col="gray")
+  legend("bottomright", paste0("AUC = ", round(auc_test@y.values[[1]], 3)))
+  
+```
+
+```{r}
+# step 1: create a prediction object 
+logfit_best <- predict(best_log_model, newdata = df_test_scaled_log, 
+                                               type='response')
+predictions_bestlogMod_test <- prediction(logfit_best,
+                                        df_test_scaled_log$binary_outcome)
+
+# step 2: calculate the ROC curve and AUC
+roc_logModbest <- performance(predictions_bestlogMod_test,measure="tpr",
+                                 x.measure="fpr")
+auc_logModbest <- performance(predictions_bestlogMod_test,measure="auc")
+
+# plot the ROC curve
+plot(roc_logModbest,main="kCV best Log Model ROC curve ",col="black",
+     lwd = 2)
+abline(0,1,lty=2,col="gray")
+legend("bottomright", paste0("AUC = ", round(auc_logModbest@y.values[[1]], 3)))
+
+# print the overall are under the curve (namely, AUC)
+print(sprintf("kCV best Log Model AUC is: %f",auc_logModbest@y.values[[1]]))
+
+# calculate accuracy on test data set 
+log.fit_test = ifelse(logfit_best > 0.5, 1, 0)
+misclassification_test = sum(log.fit_test != df_test_scaled_log$binary_outcome)/length(df_test_scaled_log$binary_outcome)
+accuracy_test = 1-misclassification_test
+print(paste("misclassification rate is",misclassification_test))
+print(paste("accuracy is", accuracy_test))  
+```
+```{r}
+summary(logModel)
+```
+```{r}
+logModel2 = glm(binary_outcome ~ participants_weight+wearables_resting_pulse+wearables_pulse_max+ 
+                weather_humidity,family = binomial, data = df_train_scaled_log)
+summary(logModel2)
+
+# our predictions here will output a probability value when type = 'response'
+log.fit2 = predict(logModel2, newdata = df_test_scaled_log, type='response')
+print(length(log.fit2))
+# we then decide a threshold with which we set the predictions equal to yes and no
+log.fit2 = ifelse(log.fit > 0.5, 1, 0)
+misclassification2 = sum(log.fit2 != df_test_scaled_log$binary_outcome)/length(df_test_scaled_log$binary_outcome)
+accuracy2 = 1-misclassification2
+print(paste("misclassification rate is",misclassification2))
+print(paste("accuracy is", accuracy2))
+
+```
+```{r}
+logModel <- best_log_model
+# our predictions here will output a probability value when type = 'response'
+log.fit = predict(logModel, newdata = df_train_scaled_log, type='response')
+print(length(log.fit))
+# we then decide a threshold with which we set the predictions equal to yes and no
+log.fit_edited = ifelse(log.fit > 0.5, 1, 0)
+misclassification = (sum(log.fit_edited != df_train_scaled_log$binary_outcome))/length(df_train_scaled_log$binary_outcome)
+accuracy = 1-misclassification
+print(paste("misclassification rate is",misclassification))
+print(paste("accuracy is", accuracy)) 
+
+predicted.data <- data.frame(probability.of.severity=log.fit, symptom = as.factor(df_train_scaled_log$binary_outcome))
+
+predicted.data$symptom <- ifelse(predicted.data$symptom == "0", "not severe","severe")
+print(predicted.data)
+
+predicted.data <- predicted.data[order(predicted.data$probability.of.severity,decreasing=FALSE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+library(cowplot)
+
+ggplot(data = predicted.data, aes(x=rank,y=probability.of.severity)) + 
+  geom_point(aes(color=symptom),alpha=1, shape=4, stroke=1.5)+
+  xlab("Index")+
+  ylab("Predicted probability of having severe symptom")+
+  theme_classic()
+
+# our predictions here will output a probability value when type = 'response'
+log.fit = predict(logModel, newdata = df_train_scaled_log, type='response')
+print(length(log.fit))
+# we then decide a threshold with which we set the predictions equal to yes and no
+log.fit = ifelse(log.fit > 0.5, 1, 0)
+misclassification = sum(log.fit != df_train_scaled_log$binary_outcome)/length(df_train_scaled_log$binary_outcome)
+accuracy = 1-misclassification
+print(paste("misclassification rate is",misclassification))
+print(paste("accuracy is", accuracy)) 
+```
+```{r}
+# our predictions here will output a probability value when type = 'response'
+log.fit = predict(logModel, newdata = df_test_scaled_log, type='response')
+print(length(log.fit))
+# we then decide a threshold with which we set the predictions equal to yes and no
+log.fit_edited = ifelse(log.fit > 0.5, 1, 0)
+misclassification = (sum(log.fit_edited != df_test_scaled_log$binary_outcome))/length(df_test_scaled_log$binary_outcome)
+accuracy = 1-misclassification
+print(paste("misclassification rate is",misclassification))
+print(paste("accuracy is", accuracy)) 
+
+#
+predicted.data <- data.frame(probability.of.severity=log.fit, symptom = as.factor(df_test_scaled_log$binary_outcome))
+
+predicted.data$symptom <- ifelse(predicted.data$symptom == "0", "not severe","severe")
+print(predicted.data)
+
+predicted.data <- predicted.data[order(predicted.data$probability.of.severity,decreasing=FALSE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+library(cowplot)
+
+ggplot(data = predicted.data, aes(x=rank,y=probability.of.severity)) + 
+  geom_point(aes(color=symptom),alpha=1, shape=4, stroke=1.5)+
+  xlab("Index")+
+  ylab("Predicted probability of having severe symptom")+
+  theme_classic()
+
+
+```
+```{r}
+#best_log_model
+
+bestlog <- as.data.frame(best_log_model_summary$coefficients)
+rank <- rank(bestlog$`Pr(>|z|)`, ties.method = "min")
+bestlog$Rank <- rank
+bestlog <- bestlog[order(bestlog$Rank), ]
+bestlog$features <- rownames(bestlog)
+
+# view the ranked data frame
+bestlog <- as.data.frame(cbind(bestlog$Rank,bestlog$features,round(bestlog$`Pr(>|z|)`,6),round(bestlog$Estimate,3), bestlog$`z value`,bestlog$`Std. Error`))
+names(bestlog)[names(bestlog) == "V1"] <- "Rank"
+names(bestlog)[names(bestlog) == "V2"] <- "Feature"
+names(bestlog)[names(bestlog) == "V3"] <- "Pr(>|z|)"
+names(bestlog)[names(bestlog) == "V4"] <- "Estimate"
+names(bestlog)[names(bestlog) == "V5"] <- "z value"
+names(bestlog)[names(bestlog) == "V6"] <- "Std. Error"
+
+print(bestlog)
+
+write.csv(bestlog, "best_log_coef.csv", row.names = FALSE)
+```
+```{r}
+
+best_log_model_summary <- summary(best_log_model)
+best_log_model_summary
+
+
+```
+
+```{r}
+# Print coefficient summary
+summary(best_log_model)$coefficients
+
+# Write out mathematical formula
+cat("p(y = 1| x) = 1 / (1 + exp(", -best_log_model$coefficients[1], "+", paste0(best_log_model$coefficients[-1], "*x", 1:(length(best_log_model$coefficients) - 1), collapse = " + "), "))")
+```
+
+```{r}
+
+```
+
+```{r}
+
+```

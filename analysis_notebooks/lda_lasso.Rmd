@@ -1,0 +1,466 @@
+---
+title: "classfication_models_v2"
+author: "Doreen"
+date: "2023-04-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(utils)
+library(MASS)
+library(ROCR)
+library(caret)
+library(gmodels)
+library(class) # Knn algorithm
+library(patchwork)
+library(psych)
+library(dplyr)
+library(reshape2)
+
+library(caret) # Hyperparameter tuning and modeling pipelines
+library(tidyverse) # Data handling functions
+library(MLmetrics) # Easy model performance metrics
+library(glmnet) # Lasso, ridge, and elastic net regression
+library(splines) # Splines
+library(psych)
+library(tree) # Decision tree
+library(randomForest) # Random forest 
+library(e1071) # SVMs
+
+set.seed(580)
+```
+
+```{r}
+# load clean data sets after preprocessing
+path_train <- '/Users/doreenmacpro/Downloads/BME580_project/data_clean/surveys_wide_join_train_data_clean.tsv'
+df_train <- read_delim(path_train,show_col_types = FALSE) 
+path_test <- '/Users/doreenmacpro/Downloads/BME580_project/data_clean/surveys_wide_join_test_data_clean.tsv'
+df_test <- read_delim(path_test,show_col_types = FALSE) 
+
+# add binary outcome 
+df_train$outcome_symptom_severity <- as.factor(df_train$outcome_symptom_severity)
+df_test$outcome_symptom_severity <- as.factor(df_test$outcome_symptom_severity)
+
+names(df_train)[names(df_train) == "outcome_symptom_severity"] <- "binary_outcome"
+names(df_test)[names(df_test) == "outcome_symptom_severity"] <- "binary_outcome"
+
+# get rid of user_code, date, and numeric outcome 
+df_train <- df_train %>% dplyr::select(-outcome_S_COVID_OVERALL)
+df_train <- df_train %>% dplyr::select(-outcome_user_code)
+df_train <- df_train %>% dplyr::select(-outcome_created_at)
+
+df_test <- df_test %>% dplyr::select(-outcome_S_COVID_OVERALL)
+df_test <- df_test %>% dplyr::select(-outcome_user_code)
+df_test <- df_test %>% dplyr::select(-outcome_created_at)
+
+# df_train <- df_train %>% dplyr::select(-participants_gender)
+# df_test <- df_test %>% dplyr::select(-participants_gender)
+
+# among the rest feature variables, only participants_age_range is range, e.g. 45-54
+# let's do an average of the min and max of the range for each patient 
+
+df_train$participants_age_range <- unlist(lapply(strsplit(df_train$participants_age_range, "-"), function(x) mean(as.numeric(x))))
+
+df_test$participants_age_range <- unlist(lapply(strsplit(df_test$participants_age_range, "-"), function(x) mean(as.numeric(x))))
+
+# convert char features to factor 
+df_train <- df_train %>% mutate_if(is.character, as.factor)
+df_test <- df_test %>% mutate_if(is.character, as.factor)
+
+# dimensionality of train and test sets
+#print(df_train)
+#print(df_test)
+
+#print(paste("number of columns of train set is", ncol(df_train)))
+#print(paste("number of columns at test set is", ncol(df_test)))
+
+#summary(df_train$binary_outcome)
+
+
+# Load the required packages
+library(smotefamily)
+library(caret)
+
+# Set the random seed for reproducibility
+set.seed(123)
+
+# Check the class distribution in the training data
+#table(df_train$binary_outcome)
+
+#df_train
+t1 = df_train %>% dplyr::select(-c(participants_gender, binary_outcome))
+#t1
+# Apply SMOTE to oversample the minority class
+trainDataSMOTE <- SMOTE(t1, df_train$binary_outcome,
+                         K = 5,
+                         dup_size = 0)
+
+# Check the class distribution in the oversampled training data
+#class(trainDataSMOTE)
+#summary(as.data.frame(trainDataSMOTE)$Species)
+df_train_oversampled <- as.data.frame(trainDataSMOTE$data)
+df_train_oversampled$class <- as.factor(df_train_oversampled$class)
+names(df_train_oversampled)[names(df_train_oversampled) == "class"] <- "binary_outcome"
+#table(trainDataSMOTE$data$class)
+print(df_train_oversampled)
+summary(df_train_oversampled$binary_outcome)
+df_train <- df_train_oversampled
+df_test_edited  <- df_test %>% dplyr::select(-c(participants_gender, binary_outcome))
+df_test_edited$binary_outcome <- df_test$binary_outcome
+
+df_test <- df_test_edited
+```
+```{r}
+
+# combine train and test before scaling 
+df <- rbind(df_train,df_test)
+# scale the data 
+scaleData = df %>% dplyr::select(-binary_outcome) %>% 
+  mutate_if(is.numeric, scale) %>% 
+  bind_cols("binary_outcome" = df$binary_outcome)
+
+
+
+# get the scaled train and test data sets 
+df_train_scaled <- head(scaleData,nrow(df_train))
+df_test_scaled <- tail(scaleData,31)
+print(df_test_scaled)
+```
+
+```{r}
+folds = 5
+x.train = model.matrix(binary_outcome~., df_train_scaled_log)
+y.train = df_train_scaled_log$binary_outcome
+# Run this code and repeat for the test set.
+x.test = model.matrix(binary_outcome~., df_test_scaled_log)
+y.test = df_test_scaled_log$binary_outcome
+lasso_model <- cv.glmnet(x = x.train, y = df_train_scaled_log$binary_outcome,
+                         alpha = 1,
+                         nfolds = folds)
+plot(lasso_model)
+
+lasso_coefs <- coef(lasso_model, s = "lambda.1se")
+print("Lasso coefficents using lambda.1se:")
+print(lasso_coefs)
+
+lasso_coefs <- coef(lasso_model, s = "lambda.1se")
+print("Lasso coefficents using lambda.1se:")
+print(lasso_coefs)
+
+selected_features <- c("weather_humidity", "wearables_resting_pulse","participants_weight",
+                       "wearables_pulse_max","hrv_lfhf","wearables_pulse_min",
+                       "weather_avg_temperature_C","participants_height",
+                       "hrv_vlf","binary_outcome")
+print(df_train_scaled)
+train_selected <- df_train_scaled[, selected_features]
+test_selected <- df_test_scaled[, selected_features]
+print(train_selected)
+```
+
+
+
+
+
+
+
+
+```{r}
+df_train_scaled_log <- NULL
+df_train_scaled_log <- train_selected
+df_test_scaled_log <- NULL
+df_test_scaled_log <- test_selected
+# LDA model 
+ldaMod <- lda(binary_outcome ~., data = df_train_scaled)
+print(ldaMod)
+
+lda_predicted_possiblities <- predict(ldaMod, newdata = df_test_scaled, 
+                                               type='response')$posterior[,2]
+
+# step 1: create a prediction object 
+predictions_lda_test <- prediction(lda_predicted_possiblities,
+                                        df_test_scaled$binary_outcome)
+
+# step 2: calculate the ROC curve and AUC
+roc_lda <- performance(predictions_lda_test,measure="tpr",
+                                 x.measure="fpr")
+auc_lda <- performance(predictions_lda_test,measure="auc")
+
+# plot the ROC curve
+plot(roc_lda,main="LDA Model ROC curve",col="black",
+     lwd = 2)
+abline(0,1,lty=2,col="gray")
+legend("bottomright", paste0("AUC = ", round(auc_lda@y.values[[1]], 3)))
+
+# print the overall are under the curve (namely, AUC)
+print(sprintf("LDA Model AUC is: %f",auc_lda@y.values[[1]]))
+
+```
+```{r}
+# Extract coefficients for LD1
+lda_coef_matrix <- coef(ldaMod)
+#lda_coef_matrix[0,0] <- "Features"
+class(lda_coef_matrix)
+
+lda_coef <- as.data.frame(lda_coef_matrix)
+
+lda_coef$abs_LD1 <- abs(lda_coef$LD1)
+
+# rank the data frame based on the absolute values of column A
+lda_coef$rank <- rank(-lda_coef$abs_LD1)
+
+# sort the data frame by rank
+lda_coef <- lda_coef[order(lda_coef$rank), ]
+
+# create a new column with row names
+lda_coef$features <- rownames(lda_coef)
+rownames(lda_coef) <- NULL
+
+# view the ranked data frame
+print(lda_coef)
+print(ncol(lda_coef))
+```
+```{r}
+# list of features contribute the least to LDA model 
+list_features <- lda_coef[lda_coef$abs_LD1 < 0, "features"]
+print(list_features)
+```
+```{r}
+# get rid of these variables in our scaled train set and test set 
+cols_to_remove <- c(list_features)
+
+# Subset the data frame to exclude the columns
+df_train_scaled_subset <- df_train_scaled[, !names(df_train_scaled) %in% cols_to_remove]
+df_test_scaled_subset <- df_test_scaled[, !names(df_test_scaled) %in% cols_to_remove]
+print(df_train_scaled_subset)
+```
+```{r}
+# Try LDA model again with the reduced dimension data frames
+
+ldaMod2 <- lda(binary_outcome ~., data = df_train_scaled_subset)
+print(ldaMod2)
+
+lda_predicted_possiblities2 <- predict(ldaMod2, newdata = df_test_scaled_subset, 
+                                               type='response')$posterior[,2]
+
+ldaPred_test = predict(ldaMod2, df_test_scaled_subset)
+predClass_val2 = ldaPred_test$class
+confusionTab_val2 = table(Predicted = predClass_val2, 
+                                 Actual = df_test_scaled_subset$binary_outcome)
+
+misclass_val2 <- 1-(sum(diag(confusionTab_val2))/
+                              sum(confusionTab_val2))
+print(sprintf("misclassification rate for test data is: %f",misclass_val2))
+
+accuracy_val2 <- 1-misclass_val2
+print(sprintf("accuracy for test data is: %f",accuracy_val2))
+
+
+# step 1: create a prediction object 
+predictions_lda_test2 <- prediction(lda_predicted_possiblities2,
+                                        df_test_scaled_subset$binary_outcome)
+
+# step 2: calculate the ROC curve and AUC
+roc_lda2 <- performance(predictions_lda_test2,measure="tpr",
+                                 x.measure="fpr")
+auc_lda2 <- performance(predictions_lda_test2,measure="auc")
+
+# plot the ROC curve
+plot(roc_lda2,main="LDA Model ROC curve",col="black",
+     lwd = 2)
+abline(0,1,lty=2,col="gray")
+legend("bottomright", paste0("AUC = ", round(auc_lda2@y.values[[1]], 3)))
+
+# print the overall are under the curve (namely, AUC)
+print(sprintf("LDA Model AUC is: %f",auc_lda2@y.values[[1]]))
+
+```
+
+```{r}
+# kCV LDA model 
+num_folds <- 5
+folds <- createFolds(df_train_scaled_subset$binary_outcome, k = num_folds)
+sapply(folds,length)
+
+matrix_lda_kCV <- matrix(nrow = num_folds, ncol = 7)
+
+best_lda_model <- NULL
+best_val_acc <- 0
+
+for (i in 1:num_folds) {
+  # get the training and validation sets for this fold
+  train_fold <- df_train_scaled_subset[-folds[[i]], ]
+  valid_fold <- df_train_scaled_subset[folds[[i]], ]
+  
+  # fit the LDA model on the training set for this fold
+  lda_model <- lda(binary_outcome ~., data = train_fold)
+  
+  # test the model on train_fold  
+  ldaPred_train = predict(lda_model, train_fold)
+  predClass_train = ldaPred_train$class
+  confusionTab_train = table(Predicted = predClass_train, 
+                                  Actual = train_fold$binary_outcome)
+
+  # test the model on val_fold
+  ldaPred_val = predict(lda_model, valid_fold)
+  predClass_val = ldaPred_val$class
+  confusionTab_val = table(Predicted = predClass_val, 
+                                 Actual = valid_fold$binary_outcome)
+  
+  matrix_lda_kCV[i,1] <- i
+  # evaluate the accuracy for each fold 
+  # calculate misclassification rate and precision for training data
+  misclass_train <- 1-(sum(diag(confusionTab_train))/
+                              sum(confusionTab_train))
+  #print(sprintf("misclassification rate for training data is: %f",misclass_train))
+  matrix_lda_kCV[i,2] <- misclass_train
+
+  precision_train <- confusionTab_train[2,2]/(confusionTab_train[2,2]+
+                                                 confusionTab_train[1,2])
+  #print(sprintf("precision for training data is: %f",precision_train))
+  matrix_lda_kCV[i,3] <- precision_train
+
+  accuracy_train <- 1-misclass_train
+  #print(sprintf("accuracy for training data is: %f",accuracy_train))
+  matrix_lda_kCV[i,4] <- accuracy_train
+
+  # calculate misclassification rate and precision for test data
+  misclass_val <- 1-(sum(diag(confusionTab_val))/
+                              sum(confusionTab_val))
+  #print(sprintf("misclassification rate for test data is: %f",misclass_val))
+  matrix_lda_kCV[i,5] <- misclass_val
+
+  precision_val <- confusionTab_val[2,2]/(confusionTab_val[2,2]+
+                                                 confusionTab_val[1,2])
+  #print(sprintf("precision for test data is: %f",precision_val))
+  matrix_lda_kCV[i,6] <- precision_val
+
+  accuracy_val <- 1-misclass_val
+  #print(sprintf("accuracy for test data is: %f",accuracy_val))
+  matrix_lda_kCV[i,7] <- accuracy_val
+  
+  if (accuracy_val > best_val_acc){
+    best_lda_model <- lda_model # pick the best model among all folds
+    best_val_acc <- accuracy_val
+  }
+}
+
+print(paste("best validation accuracy:", best_val_acc))
+
+```
+
+```{r}
+#print(matrix_lda_kCV)
+df_lda_kCV <- as.data.frame(matrix_lda_kCV)
+names(df_lda_kCV)[names(df_lda_kCV) == "V1"] <- "Fold #"
+names(df_lda_kCV)[names(df_lda_kCV) == "V2"] <- "train_misclass"
+names(df_lda_kCV)[names(df_lda_kCV) == "V3"] <- "train_precision"
+names(df_lda_kCV)[names(df_lda_kCV) == "V4"] <- "train_accuracy"
+names(df_lda_kCV)[names(df_lda_kCV) == "V5"] <- "val_misclass"
+names(df_lda_kCV)[names(df_lda_kCV) == "V6"] <- "val_precision"
+names(df_lda_kCV)[names(df_lda_kCV) == "V7"] <- "val_accuracy"
+print(df_lda_kCV)
+print(paste("mean accuracy for validation set cross all folds is:", mean(df_lda_kCV$val_accuracy)))
+```
+
+```{r}
+ # test the model on val_fold
+ 
+bestlda_predicted_possiblities <- predict(best_lda_model, newdata = df_test_scaled_subset, 
+                                               type='response')$posterior[,2]
+
+# step 1: create a prediction object 
+predictions_bestlda_test <- prediction(bestlda_predicted_possiblities,
+                                        df_test_scaled_subset$binary_outcome)
+
+# step 2: calculate the ROC curve and AUC
+roc_bestlda <- performance(predictions_bestlda_test,measure="tpr",
+                                 x.measure="fpr")
+auc_bestlda <- performance(predictions_bestlda_test,measure="auc")
+
+# plot the ROC curve
+plot(roc_bestlda,main="LDA Model ROC curve",col="black",
+     lwd = 2)
+abline(0,1,lty=2,col="gray")
+legend("bottomright", paste0("AUC = ", round(auc_bestlda@y.values[[1]], 3)))
+
+# print the overall are under the curve (namely, AUC)
+print(sprintf("kCV best LDA Model AUC is: %f",auc_bestlda@y.values[[1]]))
+
+# Accuracy 
+# test
+ldaPred_test = predict(lda_model, df_test_scaled)
+predClass_test = ldaPred_test$class
+confusionTab_test = table(Predicted = predClass_test, 
+                                 Actual = df_test_scaled$binary_outcome)
+misclass_test <- 1-(sum(diag(confusionTab_test))/
+                              sum(confusionTab_test))
+accuracy_test <- 1-misclass_test
+
+print(sprintf("misclassification rate for test data is: %f",misclass_test))
+print(sprintf("accuracy rate for test data is: %f",accuracy_test))
+
+# train 
+ldaPred_train = predict(lda_model, df_train_scaled)
+predClass_train = ldaPred_train$class
+confusionTab_train = table(Predicted = predClass_train, 
+                                 Actual = df_train_scaled$binary_outcome)
+misclass_train <- 1-(sum(diag(confusionTab_train))/
+                              sum(confusionTab_train))
+accuracy_train <- 1-misclass_train
+
+print(sprintf("misclassification rate for train data is: %f",misclass_train))
+print(sprintf("accuracy rate for train data is: %f",accuracy_train))
+```
+
+```{r}
+lda_predictions <- predict (best_lda_model)
+ldahist(data = lda_predictions$x[,], g=df_train_scaled$binary_outcome)
+
+#add lables
+#text(lda.values$x[,1], lda.values$x[,2], Type, cex = 0.7, pos = 4, col = "red")
+
+plot(best_lda_model, col=as.numeric(df_train_scaled$binary_outcome)) # assign color code based on # factor code
+```
+
+```{r}
+best_lda_model
+# Extract coefficients for LD1
+lda_coef_matrix <- coef(best_lda_model)
+#lda_coef_matrix[0,0] <- "Features"
+class(lda_coef_matrix)
+
+lda_coef <- as.data.frame(lda_coef_matrix)
+
+lda_coef$abs_LD1 <- abs(lda_coef$LD1)
+
+# rank the data frame based on the absolute values of column A
+lda_coef$rank <- rank(-lda_coef$abs_LD1)
+
+# sort the data frame by rank
+lda_coef <- lda_coef[order(lda_coef$rank), ]
+
+# create a new column with row names
+lda_coef$features <- rownames(lda_coef)
+rownames(lda_coef) <- NULL
+
+# view the ranked data frame
+lda_coef <- as.data.frame(cbind(lda_coef$rank,lda_coef$features, round(lda_coef$LD1,3), lda_coef$abs_LD1))
+names(lda_coef)[names(lda_coef) == "V1"] <- "Rank"
+names(lda_coef)[names(lda_coef) == "V2"] <- "Feature"
+names(lda_coef)[names(lda_coef) == "V3"] <- "LD1"
+names(lda_coef)[names(lda_coef) == "V4"] <- "abs_LD1"
+
+print(lda_coef)
+print(ncol(lda_coef))
+
+# save the data frame to a CSV file
+write.csv(lda_coef, "best_lda_coef.csv", row.names = FALSE)
+```
+
+```{r}
+
+
+```
